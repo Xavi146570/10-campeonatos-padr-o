@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: football-alerts-bot
+    runtime: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "PYTHONPATH=src gunicorn app:app"  # ← MUDANÇA AQUI
+    plan: free
+    envVars:
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      - key: ADMIN_MODE
+        value: "true"
+      - key: GLOBAL_DRY_RUN
+        value: "false"
+      - key: MAX_API_REQUESTS
+        value: "200"
+      - key: API_REQUEST_DELAY
+        value: "0.7"
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: TELEGRAM_CHAT_MAP
+        sync: false
+      - key: API_FOOTBALL_KEY
+        sync: false
+      - key: ADMIN_TELEGRAM_CHAT_ID
+        sync: false
+
+cronJobs: []
