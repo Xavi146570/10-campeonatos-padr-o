@@ -2,7 +2,7 @@ import os
 import threading
 from datetime import datetime
 from flask import Flask, request, jsonify
-from processor import FootballProcessor
+from .processor import FootballProcessor
 
 app = Flask(__name__)
 
