@@ -3,6 +3,8 @@ import json
 import time
 import threading
 from datetime import datetime
+
+# Imports locais (sem pontos, sem prefixos) - ESTAS LINHAS MUDARAM
 from config.leagues import LEAGUE_CONFIGS
 from providers.api_football import ApiFootballClient
 from providers.telegram_sender import TelegramSender
