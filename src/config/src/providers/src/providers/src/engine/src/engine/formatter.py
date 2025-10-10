@@ -3,7 +3,6 @@ from dateutil import tz
 
 class MessageFormatter:
     def format_highlight_message(self, match_data):
-        """Formata mensagem de jogo em destaque"""
         # Dados básicos
         home_team = match_data["home_team"]
         away_team = match_data["away_team"]
@@ -67,17 +66,10 @@ class MessageFormatter:
         return message
 
     def _get_timezone_label(self, timezone_str):
-        """Converte timezone para label legível"""
         labels = {
-            "Europe/London": "Londres",
-            "Europe/Madrid": "Madrid", 
-            "Europe/Rome": "Roma",
-            "Europe/Berlin": "Berlim",
-            "Europe/Paris": "Paris",
-            "Europe/Lisbon": "Lisboa",
-            "Europe/Brussels": "Bruxelas",
-            "Europe/Istanbul": "Istambul",
-            "America/Sao_Paulo": "Brasília",
-            "America/Argentina/Buenos_Aires": "Buenos Aires"
+            "Europe/London": "Londres", "Europe/Madrid": "Madrid", "Europe/Rome": "Roma",
+            "Europe/Berlin": "Berlim", "Europe/Paris": "Paris", "Europe/Lisbon": "Lisboa",
+            "Europe/Brussels": "Bruxelas", "Europe/Istanbul": "Istambul",
+            "America/Sao_Paulo": "Brasília", "America/Argentina/Buenos_Aires": "Buenos Aires"
         }
         return labels.get(timezone_str, timezone_str.split("/")[-1])
