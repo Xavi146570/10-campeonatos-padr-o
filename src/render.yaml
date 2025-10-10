@@ -3,7 +3,7 @@ services:
     name: football-alerts-bot
     runtime: python
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn --chdir src app:app"
+    startCommand: "cd src && python -m gunicorn app:app --bind 0.0.0.0:$PORT"
     plan: free
     envVars:
       - key: WEBHOOK_SECRET
