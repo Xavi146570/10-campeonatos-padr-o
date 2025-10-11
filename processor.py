@@ -4,11 +4,11 @@ import time
 import threading
 from datetime import datetime
 
-from config.leagues import LEAGUE_CONFIGS
-from config.api_football import ApiFootballClient
-from config.telegram_sender import TelegramSender
-from config.analyzer import MatchAnalyzer
-from config.formatter import MessageFormatter
+from leagues import LEAGUE_CONFIGS
+from api_football import ApiFootballClient
+from telegram_sender import TelegramSender
+from analyzer import MatchAnalyzer
+from formatter import MessageFormatter
 
 class FootballProcessor:
     def __init__(self):
