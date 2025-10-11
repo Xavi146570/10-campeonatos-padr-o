@@ -3,7 +3,7 @@ import json
 from datetime import datetime
 
 # SUBSTITUA pelo seu token completo do @BotFather
-BOT_TOKEN = "8215600418:SUA_PARTE_SECRETA_AQUI"
+BOT_TOKEN = "8215600418:AAGALOIdm8r3LqYN58AZencrpfYX1LbHcUY"
 
 def descobrir_chat_ids():
     """Descobre Chat IDs de canais e grupos onde o bot foi adicionado"""
