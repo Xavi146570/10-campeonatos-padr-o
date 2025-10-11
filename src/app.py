@@ -3,7 +3,7 @@ import threading
 from datetime import datetime
 from flask import Flask, request, jsonify
 
-# Import local (sem pontos, sem prefixos)
+# Import direto - ambos estão na raiz
 from processor import FootballProcessor
 
 app = Flask(__name__)
