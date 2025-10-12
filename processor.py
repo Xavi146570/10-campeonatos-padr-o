@@ -123,18 +123,6 @@ class FootballProcessor:
     if not fixtures:
         return {"games_analyzed": 0, "alerts_sent": 0}
     
-    # Buscar estatísticas reais da liga (se habilitado)
-    league_real_stats = None
-    try:
-        season = api.get_current_season(league_config["api_id"])
-        league_real_stats = api.get_league_real_stats(league_config["api_id"], season)
-        if league_real_stats:
-            self.log(f"📊 Stats reais: {league_real_stats['total_games']} jogos ({league_real_stats['days_analyzed']}d)")
-        else:
-            self.log(f"📊 Usando stats de referência para {league_config['name']}")
-    except Exception as e:
-        self.log(f"⚠️ Stats de referência: {e}")
-    
     # Coletar IDs únicos
     team_ids = []
     for fixture in fixtures:
@@ -143,17 +131,8 @@ class FootballProcessor:
             fixture["teams"]["away"]["id"]
         ])
     
-    # Buscar stats FT e HT
+    # Buscar stats em lote
     team_stats = api.get_teams_stats_batch(list(set(team_ids)))
-    team_ht_stats = {}
-    
-    # Buscar stats HT se habilitado
-    if os.getenv("ENABLE_HT_ANALYSIS", "true").lower() == "true":
-        try:
-            team_ht_stats = api.get_teams_ht_stats_batch(list(set(team_ids)))
-            self.log(f"📊 Stats HT carregadas para {len(team_ht_stats)} times")
-        except Exception as e:
-            self.log(f"⚠️ Erro ao carregar stats HT: {e}")
     
     # Processar jogos
     alerts_sent = 0
@@ -166,49 +145,26 @@ class FootballProcessor:
         try:
             home_id = fixture["teams"]["home"]["id"]
             away_id = fixture["teams"]["away"]["id"]
-            home_name = fixture["teams"]["home"]["name"]
-            away_name = fixture["teams"]["away"]["name"]
             
             home_stats = team_stats.get(home_id, (None, 0))
             away_stats = team_stats.get(away_id, (None, 0))
-            home_ht_stats = team_ht_stats.get(home_id) if team_ht_stats else None
-            away_ht_stats = team_ht_stats.get(away_id) if team_ht_stats else None
             
-            # Análise expandida
-            meets_criteria, criteria_type = analyzer.meets_highlight_criteria(
-                home_stats, away_stats, home_ht_stats, away_ht_stats
-            )
-            
-            if meets_criteria:
-                self.log(f"✅ DESTAQUE ({criteria_type}): {home_name} vs {away_name}")
-                
-                # Preparar dados completos
-                match_data = analyzer.prepare_match_data(
-                    fixture, home_stats, away_stats, league_real_stats,
-                    home_ht_stats, away_ht_stats, criteria_type
-                )
+            if analyzer.meets_highlight_criteria(home_stats, away_stats):
+                match_data = analyzer.prepare_match_data(fixture, home_stats, away_stats)
                 message = formatter.format_highlight_message(match_data)
                 
                 if dry_run:
-                    self.log(f"🧪 DRY RUN - Mensagem formatada para {league_config['name']}")
+                    self.log(f"🧪 DRY RUN - {fixture['teams']['home']['name']} vs {fixture['teams']['away']['name']}")
                 else:
                     if chat_id and telegram.send_message(chat_id, message):
                         alerts_sent += 1
-                        self.log(f"📨 Alerta enviado: {home_name} vs {away_name}")
-            else:
-                # Log detalhado
-                home_ft = home_stats[0] or 0
-                away_ft = away_stats[0] or 0
-                home_ht = home_ht_stats[0] if home_ht_stats else 0
-                away_ht = away_ht_stats[0] if away_ht_stats else 0
-                
-                self.log(f"⏭️ {home_name} vs {away_name} - FT: H:{home_ft:.2f} A:{away_ft:.2f} | HT: H:{home_ht:.2f} A:{away_ht:.2f}")
-                
+                        
         except Exception as e:
-            self.log(f"❌ Erro ao processar {home_name} vs {away_name}: {e}")
+            self.log(f"❌ Erro ao processar jogo: {e}")
             continue
     
     return {"games_analyzed": games_analyzed, "alerts_sent": alerts_sent}
+
 
     def _get_chat_id_for_league(self, league_code):
         # Tentar chat específico por liga
