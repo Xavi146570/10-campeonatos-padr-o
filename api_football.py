@@ -1,7 +1,7 @@
 import os
 import time
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from dateutil import tz
 
 class ApiFootballError(Exception):
@@ -13,12 +13,18 @@ class ApiFootballClient:
         self.base_url = "https://v3.football.api-sports.io"
         self.headers = {"x-apisports-key": self.api_key}
         
-        # Otimizações para conta paga
+        # Otimizações
         self.request_count = 0
         self.max_requests_per_run = int(os.getenv("MAX_API_REQUESTS", "200"))
         self.request_delay = float(os.getenv("API_REQUEST_DELAY", "0.7"))
         self.cache = {}
-        self.cache_durations = {"fixtures": 300, "team_stats": 7200, "season": 86400}
+        self.cache_durations = {
+            "fixtures": 300,
+            "team_stats": 7200,
+            "team_ht_stats": 7200,
+            "league_stats": 21600,  # 6 horas
+            "season": 86400
+        }
         
         if not self.api_key:
             raise ApiFootballError("API_FOOTBALL_KEY não configurada")
@@ -28,7 +34,7 @@ class ApiFootballClient:
         return (time.time() - timestamp) < duration
 
     def _make_request(self, endpoint, params=None, cache_type=None, cache_key=None):
-        # Verificar cache primeiro
+        # Verificar cache
         if cache_key and cache_type:
             full_key = f"{cache_type}:{cache_key}"
             if full_key in self.cache:
@@ -122,6 +128,7 @@ class ApiFootballClient:
             return []
 
     def get_teams_stats_batch(self, team_ids, last_n=4):
+        """Busca stats FT para os times"""
         results = {}
         unique_teams = list(dict.fromkeys(team_ids))
         
@@ -145,24 +152,21 @@ class ApiFootballClient:
                     results[team_id] = (None, 0)
                     continue
                 
-                goals = []
+                goals_scored = []
                 for fixture in fixtures:
                     home_id = fixture["teams"]["home"]["id"]
                     away_id = fixture["teams"]["away"]["id"]
-                    home_goals = fixture["goals"]["home"]
-                    away_goals = fixture["goals"]["away"]
-                    
-                    if home_goals is None or away_goals is None:
-                        continue
+                    home_goals = fixture["goals"]["home"] or 0
+                    away_goals = fixture["goals"]["away"] or 0
                     
                     if team_id == home_id:
-                        goals.append(home_goals)
+                        goals_scored.append(home_goals)
                     elif team_id == away_id:
-                        goals.append(away_goals)
+                        goals_scored.append(away_goals)
                 
-                if goals:
-                    avg = round(sum(goals) / len(goals), 2)
-                    results[team_id] = (avg, len(goals))
+                if goals_scored:
+                    avg = round(sum(goals_scored) / len(goals_scored), 2)
+                    results[team_id] = (avg, len(goals_scored))
                 else:
                     results[team_id] = (None, 0)
                 
@@ -171,6 +175,144 @@ class ApiFootballClient:
                 results[team_id] = (None, 0)
         
         return results
+
+    def get_teams_ht_stats_batch(self, team_ids, last_n=4):
+        """Busca stats HT para os times"""
+        results = {}
+        unique_teams = list(dict.fromkeys(team_ids))
+        
+        for team_id in unique_teams:
+            try:
+                cache_key = f"{team_id}:{last_n}"
+                cached = self.cache.get(f"team_ht_stats:{cache_key}")
+                
+                if cached and self._is_cache_valid(cached[1], "team_ht_stats"):
+                    results[team_id] = cached[0]
+                    continue
+                
+                if self.request_count >= self.max_requests_per_run:
+                    results[team_id] = (None, 0)
+                    continue
+                
+                params = {"team": team_id, "last": last_n, "status": "FT"}
+                fixtures = self._make_request("/fixtures", params, "team_ht_stats", cache_key)
+                
+                if not fixtures:
+                    results[team_id] = (None, 0)
+                    continue
+                
+                ht_totals = []
+                for fixture in fixtures:
+                    # Buscar gols do primeiro tempo
+                    score = fixture.get("score", {})
+                    halftime = score.get("halftime", {})
+                    ht_home = halftime.get("home")
+                    ht_away = halftime.get("away")
+                    
+                    if ht_home is not None and ht_away is not None:
+                        ht_totals.append(ht_home + ht_away)
+                
+                if ht_totals:
+                    avg = round(sum(ht_totals) / len(ht_totals), 2)
+                    results[team_id] = (avg, len(ht_totals))
+                else:
+                    results[team_id] = (None, 0)
+                
+            except Exception as e:
+                print(f"❌ Erro HT team {team_id}: {e}")
+                results[team_id] = (None, 0)
+        
+        return results
+
+    def get_league_real_stats(self, league_id, season):
+        """Calcula estatísticas reais da liga (otimizado)"""
+        try:
+            # Verificar se está habilitado
+            if os.getenv("ENABLE_REAL_LEAGUE_STATS", "false").lower() != "true":
+                return None
+            
+            cache_key = f"{league_id}:{season}"
+            cached = self.cache.get(f"league_stats:{cache_key}")
+            
+            if cached and self._is_cache_valid(cached[1], "league_stats"):
+                return cached[0]
+            
+            # Reservar requests para outras operações
+            if self.request_count >= self.max_requests_per_run - 10:
+                return None
+            
+            # Buscar jogos dos últimos 120 dias para otimizar
+            end_date = datetime.now().date()
+            start_date = end_date - timedelta(days=120)
+            
+            params = {
+                "league": league_id,
+                "season": season,
+                "from": start_date.strftime("%Y-%m-%d"),
+                "to": end_date.strftime("%Y-%m-%d"),
+                "status": "FT"
+            }
+            
+            fixtures = self._make_request("/fixtures", params, "league_stats", cache_key)
+            
+            if not fixtures or len(fixtures) < 30:  # Mínimo para análise confiável
+                return None
+            
+            # Calcular estatísticas
+            total_games = len(fixtures)
+            total_goals = 0
+            total_goals_ht = 0
+            btts_count = 0
+            over15_ht_count = 0
+            over25_count = 0
+            over35_count = 0
+            
+            for fixture in fixtures:
+                # Gols tempo total
+                home_goals = fixture["goals"]["home"] or 0
+                away_goals = fixture["goals"]["away"] or 0
+                match_goals = home_goals + away_goals
+                total_goals += match_goals
+                
+                # Gols primeiro tempo
+                score = fixture.get("score", {})
+                halftime = score.get("halftime", {})
+                home_ht = halftime.get("home") if halftime.get("home") is not None else 0
+                away_ht = halftime.get("away") if halftime.get("away") is not None else 0
+                match_goals_ht = home_ht + away_ht
+                total_goals_ht += match_goals_ht
+                
+                # Contadores
+                if home_goals > 0 and away_goals > 0:
+                    btts_count += 1
+                    
+                if match_goals_ht > 1.5:
+                    over15_ht_count += 1
+                    
+                if match_goals > 2.5:
+                    over25_count += 1
+                    
+                if match_goals > 3.5:
+                    over35_count += 1
+            
+            stats = {
+                "total_games": total_games,
+                "avg_goals_per_match": round(total_goals / total_games, 2),
+                "avg_goals_ht": round(total_goals_ht / total_games, 2),
+                "btts_rate": round((btts_count / total_games) * 100),
+                "over15_ht_rate": round((over15_ht_count / total_games) * 100),
+                "over25_rate": round((over25_count / total_games) * 100),
+                "over35_rate": round((over35_count / total_games) * 100),
+                "second_half_share": round(((total_goals - total_goals_ht) / total_goals) * 100) if total_goals > 0 else 50,
+                "days_analyzed": 120,
+                "is_real": True
+            }
+            
+            return stats
+            
+        except Exception as e:
+            print(f"⚠️ Erro ao calcular stats da liga: {e}")
+            return None
 
     def get_execution_stats(self):
         return {
