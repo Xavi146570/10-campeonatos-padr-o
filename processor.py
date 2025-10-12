@@ -84,7 +84,7 @@ class FootballProcessor:
                 "leagues_processed": leagues_processed,
                 "total_games": total_games,
                 "total_alerts": total_alerts,
-                "api_requests": api.request_count,
+                "api_requests": getattr(api, 'request_count', 0),
                 "dry_run": effective_dry_run
             }
             
@@ -117,10 +117,11 @@ class FootballProcessor:
         # Estatísticas reais da liga (se habilitado)
         league_real_stats = None
         try:
-            season = api.get_current_season(league_config["api_id"])
-            league_real_stats = api.get_league_real_stats(league_config["api_id"], season)
-            if league_real_stats:
-                self.log(f"📊 Stats reais: {league_real_stats['total_games']} jogos")
+            if os.getenv("ENABLE_REAL_LEAGUE_STATS", "true").lower() == "true":
+                season = api.get_current_season(league_config["api_id"])
+                league_real_stats = api.get_league_real_stats(league_config["api_id"], season)
+                if league_real_stats:
+                    self.log(f"📊 Stats reais: {league_real_stats['total_games']} jogos")
         except Exception as e:
             self.log(f"⚠️ Usando stats de referência: {str(e)[:50]}")
         
@@ -161,7 +162,7 @@ class FootballProcessor:
                 home_ht_stats = team_ht_stats.get(home_id) if team_ht_stats else None
                 away_ht_stats = team_ht_stats.get(away_id) if team_ht_stats else None
                 
-                # Análise expandida
+                # Análise expandida com critérios FT e HT
                 meets_criteria, criteria_type = analyzer.meets_highlight_criteria(
                     home_stats, away_stats, home_ht_stats, away_ht_stats
                 )
