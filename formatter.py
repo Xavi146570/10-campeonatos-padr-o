@@ -4,33 +4,26 @@ import os
 
 class MessageFormatter:
     def format_highlight_message(self, match_data):
-        """Formata mensagem completa com dados reais e padrões HT"""
-        # Dados básicos
         home_team = match_data["home_team"]
         away_team = match_data["away_team"]
         home_avg = match_data["home_avg"]
         away_avg = match_data["away_avg"]
         
-        # Configurações
         config = match_data["league_config"]
         league_name = config["name"]
         min_threshold = match_data["min_threshold"]
         
-        # Stats reais da liga (se disponíveis)
         league_stats = match_data.get("league_real_stats")
         hist = config["historical_minimums"]
         peaks = config["peak_minutes"]
         
-        # Controles de exibição
         show_peak_minutes = os.getenv("SHOW_PEAK_MINUTES", "true").lower() == "true"
         show_league_stats = os.getenv("SHOW_LEAGUE_STATS", "true").lower() == "true"
         show_ht_patterns = os.getenv("SHOW_HT_PATTERNS", "true").lower() == "true"
         
-        # Emojis
         home_emoji = "✅" if match_data["home_meets_criteria"] else ""
         away_emoji = "✅" if match_data["away_meets_criteria"] else ""
         
-        # Data/hora
         match_datetime = datetime.fromisoformat(
             match_data["match_time"].replace("Z", "+00:00")
         )
@@ -46,7 +39,6 @@ class MessageFormatter:
         time_str = local_time.strftime("%H:%M")
         tz_label = self._get_timezone_label(config["timezone"])
         
-        # Construir mensagem
         message = f"""🚨 JOGO EM DESTAQUE {day_label}!
 
 ⚽ {home_team} vs {away_team}
@@ -57,7 +49,6 @@ class MessageFormatter:
 • {away_team}: {away_avg:.2f} gols/jogo {away_emoji}
 (Pelo menos uma ≥ {min_threshold:.2f})"""
 
-        # Seção HT (se habilitada e dados disponíveis)
         if show_ht_patterns and match_data.get("has_ht_data"):
             home_avg_ht = match_data["home_avg_ht"]
             away_avg_ht = match_data["away_avg_ht"]
@@ -73,7 +64,6 @@ class MessageFormatter:
 • {away_team}: {away_avg_ht:.2f} gols HT {away_emoji_ht}
 (Critério HT: ≥ {min_ht:.2f})"""
 
-        # Minutos de pico (se habilitado)
         if show_peak_minutes:
             message += f"""
 
@@ -82,9 +72,7 @@ class MessageFormatter:
 • 75': ≥{peaks['75']}% probabilidade  
 • 85': ≥{peaks['85']}% probabilidade"""
 
-        # Padrões da liga (se habilitado)
         if show_league_stats:
-            # Usar dados reais se disponíveis, senão usar históricos
             if league_stats and league_stats.get("is_real"):
                 stats_title = f"DADOS REAIS {league_name.upper()} (Últimos {league_stats['days_analyzed']} dias)"
                 games_info = f" - {league_stats['total_games']} jogos"
@@ -101,7 +89,7 @@ class MessageFormatter:
                 games_info = ""
                 
                 avg_goals = hist["avg_goals_per_match"]
-                avg_goals_ht = round(avg_goals * 0.44, 2)  # Estimativa: ~44% dos gols no HT
+                avg_goals_ht = round(avg_goals * 0.44, 2)
                 btts_rate = hist["btts_rate"]
                 over15_ht = hist["over15_ht_rate"]
                 over25_rate = hist["over25_rate"]
@@ -115,7 +103,6 @@ class MessageFormatter:
 • BTTS: {btts_rate}% | Over 2.5: {over25_rate}% | Over 3.5: {over35_rate}%
 • Over 1.5 HT: {over15_ht}% | 2º tempo: {sh_share}% dos gols"""
 
-        # Rodapé
         data_source = "dados reais confirmam" if league_stats and league_stats.get("is_real") else "padrões sugerem"
         message += f"""
 
