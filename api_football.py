@@ -13,17 +13,13 @@ class ApiFootballClient:
         self.base_url = "https://v3.football.api-sports.io"
         self.headers = {"x-apisports-key": self.api_key}
         
-        # Otimizações
         self.request_count = 0
         self.max_requests_per_run = int(os.getenv("MAX_API_REQUESTS", "200"))
         self.request_delay = float(os.getenv("API_REQUEST_DELAY", "0.7"))
         self.cache = {}
         self.cache_durations = {
-            "fixtures": 300,
-            "team_stats": 7200,
-            "team_ht_stats": 7200,
-            "league_stats": 21600,  # 6 horas
-            "season": 86400
+            "fixtures": 300, "team_stats": 7200, "team_ht_stats": 7200, 
+            "league_stats": 21600, "season": 86400
         }
         
         if not self.api_key:
@@ -34,7 +30,6 @@ class ApiFootballClient:
         return (time.time() - timestamp) < duration
 
     def _make_request(self, endpoint, params=None, cache_type=None, cache_key=None):
-        # Verificar cache
         if cache_key and cache_type:
             full_key = f"{cache_type}:{cache_key}"
             if full_key in self.cache:
@@ -42,15 +37,12 @@ class ApiFootballClient:
                 if self._is_cache_valid(ts, cache_type):
                     return data
 
-        # Verificar limites
         if self.request_count >= self.max_requests_per_run:
             raise ApiFootballError(f"Limite de {self.max_requests_per_run} requisições atingido")
 
-        # Rate limiting
         if self.request_count > 0:
             time.sleep(self.request_delay)
 
-        # Fazer requisição
         for attempt in range(3):
             try:
                 response = requests.get(
@@ -71,7 +63,6 @@ class ApiFootballClient:
                 response.raise_for_status()
                 data = response.json().get("response", [])
                 
-                # Salvar no cache
                 if cache_key and cache_type:
                     self.cache[f"{cache_type}:{cache_key}"] = (data, time.time())
                 
@@ -115,10 +106,7 @@ class ApiFootballClient:
             }
             
             fixtures = self._make_request(
-                "/fixtures", 
-                params, 
-                "fixtures", 
-                f"{league_id}:{today}"
+                "/fixtures", params, "fixtures", f"{league_id}:{today}"
             )
             
             return [f for f in fixtures if f["fixture"]["status"]["short"] in ["NS", "TBD"]]
@@ -128,7 +116,6 @@ class ApiFootballClient:
             return []
 
     def get_teams_stats_batch(self, team_ids, last_n=4):
-        """Busca stats FT para os times"""
         results = {}
         unique_teams = list(dict.fromkeys(team_ids))
         
@@ -177,7 +164,6 @@ class ApiFootballClient:
         return results
 
     def get_teams_ht_stats_batch(self, team_ids, last_n=4):
-        """Busca stats HT para os times"""
         results = {}
         unique_teams = list(dict.fromkeys(team_ids))
         
@@ -203,7 +189,6 @@ class ApiFootballClient:
                 
                 ht_totals = []
                 for fixture in fixtures:
-                    # Buscar gols do primeiro tempo
                     score = fixture.get("score", {})
                     halftime = score.get("halftime", {})
                     ht_home = halftime.get("home")
@@ -225,29 +210,24 @@ class ApiFootballClient:
         return results
 
     def get_league_real_stats(self, league_id, season):
-        """Calcula estatísticas reais da liga (otimizado)"""
+        if os.getenv("ENABLE_REAL_LEAGUE_STATS", "false").lower() != "true":
+            return None
+        
+        cache_key = f"{league_id}:{season}"
+        cached = self.cache.get(f"league_stats:{cache_key}")
+        
+        if cached and self._is_cache_valid(cached[1], "league_stats"):
+            return cached[0]
+        
+        if self.request_count >= self.max_requests_per_run - 10:
+            return None
+        
         try:
-            # Verificar se está habilitado
-            if os.getenv("ENABLE_REAL_LEAGUE_STATS", "false").lower() != "true":
-                return None
-            
-            cache_key = f"{league_id}:{season}"
-            cached = self.cache.get(f"league_stats:{cache_key}")
-            
-            if cached and self._is_cache_valid(cached[1], "league_stats"):
-                return cached[0]
-            
-            # Reservar requests para outras operações
-            if self.request_count >= self.max_requests_per_run - 10:
-                return None
-            
-            # Buscar jogos dos últimos 120 dias para otimizar
             end_date = datetime.now().date()
             start_date = end_date - timedelta(days=120)
             
             params = {
-                "league": league_id,
-                "season": season,
+                "league": league_id, "season": season,
                 "from": start_date.strftime("%Y-%m-%d"),
                 "to": end_date.strftime("%Y-%m-%d"),
                 "status": "FT"
@@ -255,10 +235,9 @@ class ApiFootballClient:
             
             fixtures = self._make_request("/fixtures", params, "league_stats", cache_key)
             
-            if not fixtures or len(fixtures) < 30:  # Mínimo para análise confiável
+            if not fixtures or len(fixtures) < 30:
                 return None
             
-            # Calcular estatísticas
             total_games = len(fixtures)
             total_goals = 0
             total_goals_ht = 0
@@ -268,13 +247,11 @@ class ApiFootballClient:
             over35_count = 0
             
             for fixture in fixtures:
-                # Gols tempo total
                 home_goals = fixture["goals"]["home"] or 0
                 away_goals = fixture["goals"]["away"] or 0
                 match_goals = home_goals + away_goals
                 total_goals += match_goals
                 
-                # Gols primeiro tempo
                 score = fixture.get("score", {})
                 halftime = score.get("halftime", {})
                 home_ht = halftime.get("home") if halftime.get("home") is not None else 0
@@ -282,20 +259,16 @@ class ApiFootballClient:
                 match_goals_ht = home_ht + away_ht
                 total_goals_ht += match_goals_ht
                 
-                # Contadores
                 if home_goals > 0 and away_goals > 0:
                     btts_count += 1
-                    
                 if match_goals_ht > 1.5:
                     over15_ht_count += 1
-                    
                 if match_goals > 2.5:
                     over25_count += 1
-                    
                 if match_goals > 3.5:
                     over35_count += 1
             
-            stats = {
+            return {
                 "total_games": total_games,
                 "avg_goals_per_match": round(total_goals / total_games, 2),
                 "avg_goals_ht": round(total_goals_ht / total_games, 2),
@@ -308,16 +281,6 @@ class ApiFootballClient:
                 "is_real": True
             }
             
-            return stats
-            
         except Exception as e:
             print(f"⚠️ Erro ao calcular stats da liga: {e}")
             return None
-
-    def get_execution_stats(self):
-        return {
-            "requests_used": self.request_count,
-            "max_allowed": self.max_requests_per_run,
-            "cache_entries": len(self.cache),
-            "efficiency": f"{((self.max_requests_per_run - self.request_count) / self.max_requests_per_run * 100):.1f}%"
-        }
