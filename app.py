@@ -2,17 +2,13 @@ import os
 import threading
 from datetime import datetime
 from flask import Flask, request, jsonify
-
-# Import direto - ambos estão na raiz
 from processor import FootballProcessor
 
 app = Flask(__name__)
 
-# Configurações
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "your-secret-key")
 ADMIN_MODE = os.getenv("ADMIN_MODE", "false").lower() == "true"
 
-# Processador global
 processor = FootballProcessor()
 
 @app.route("/", methods=["GET"])
@@ -22,13 +18,12 @@ def health_check():
         "service": "Football Alerts Bot",
         "timestamp": datetime.now().isoformat(),
         "leagues_configured": 10,
-        "version": "2.0"
+        "version": "2.1"
     })
 
 @app.route("/webhook/daily-trigger", methods=["POST"])
 def daily_trigger():
     try:
-        # Verificar autenticação
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
             return jsonify({"error": "Token necessário"}), 401
@@ -37,14 +32,12 @@ def daily_trigger():
         if token != WEBHOOK_SECRET:
             return jsonify({"error": "Token inválido"}), 403
         
-        # Verificar se já está processando
         if processor.is_processing():
             return jsonify({
                 "status": "already_running",
                 "message": "Processamento já em andamento"
             }), 202
         
-        # Iniciar processamento em thread separada
         thread = threading.Thread(target=processor.process_all_leagues)
         thread.daemon = True
         thread.start()
@@ -80,8 +73,5 @@ def get_logs():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    
     print(f"🚀 Football Alerts Bot iniciado na porta {port}")
-    print(f"🔧 Modo Admin: {'ATIVO' if ADMIN_MODE else 'INATIVO'}")
-    
     app.run(host="0.0.0.0", port=port, debug=False)
