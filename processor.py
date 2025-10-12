@@ -3,11 +3,11 @@ import json
 import time
 import threading
 from datetime import datetime
-from config.leagues import LEAGUE_CONFIGS
-from config.api_football import ApiFootballClient
-from config.telegram_sender import TelegramSender
-from config.analyzer import MatchAnalyzer
-from config.formatter import MessageFormatter
+from leagues import LEAGUE_CONFIGS
+from api_football import ApiFootballClient
+from telegram_sender import TelegramSender
+from analyzer import MatchAnalyzer
+from formatter import MessageFormatter
 
 class FootballProcessor:
     def __init__(self):
@@ -114,7 +114,6 @@ class FootballProcessor:
         if not fixtures:
             return {"games_analyzed": 0, "alerts_sent": 0}
         
-        # Estatísticas reais da liga (se habilitado)
         league_real_stats = None
         try:
             if os.getenv("ENABLE_REAL_LEAGUE_STATS", "true").lower() == "true":
@@ -125,7 +124,6 @@ class FootballProcessor:
         except Exception as e:
             self.log(f"⚠️ Usando stats de referência: {str(e)[:50]}")
         
-        # Coletar IDs únicos de times
         team_ids = []
         for fixture in fixtures:
             team_ids.extend([
@@ -133,7 +131,6 @@ class FootballProcessor:
                 fixture["teams"]["away"]["id"]
             ])
         
-        # Buscar stats FT e HT em lote
         team_stats = api.get_teams_stats_batch(list(set(team_ids)))
         team_ht_stats = {}
         
@@ -145,7 +142,6 @@ class FootballProcessor:
             except Exception as e:
                 self.log(f"⚠️ Stats HT indisponíveis: {str(e)[:50]}")
         
-        # Processar jogos
         alerts_sent = 0
         games_analyzed = len(fixtures)
         chat_id = self._get_chat_id_for_league(league_code)
@@ -162,7 +158,6 @@ class FootballProcessor:
                 home_ht_stats = team_ht_stats.get(home_id) if team_ht_stats else None
                 away_ht_stats = team_ht_stats.get(away_id) if team_ht_stats else None
                 
-                # Análise expandida com critérios FT e HT
                 meets_criteria, criteria_type = analyzer.meets_highlight_criteria(
                     home_stats, away_stats, home_ht_stats, away_ht_stats
                 )
