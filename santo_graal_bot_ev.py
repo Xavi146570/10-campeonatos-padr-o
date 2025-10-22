@@ -1,6 +1,7 @@
 """
 Santo Graal Bot EV+ - Sistema de Detecção de Expected Value
 Versão com HTTP endpoint para Render Web Service (gratuito)
+CORREÇÃO: Telegram MarkdownV2 escape perfeito
 
 Monitora jogos 0-0 no HT e calcula probabilidades/EV para Over 0.5 e Over 1.5 FT
 """
@@ -640,13 +641,14 @@ def main():
     
     try:
         # Enviar mensagem de inicialização
+        # CORREÇÃO: Escape MarkdownV2 perfeito - SEM pontos decimais
         startup_message = (
             "🤖 *Santo Graal Bot EV\\+ Iniciado\\!*\n\n"
             f"📊 *Ligas monitoradas:* {len(Config.LEAGUES)}\n"
-            f"⚡ *EV mínimo:* \\+{Config.MIN_EV_PERCENT}%\n"
-            f"💰 *Stake máximo:* {Config.MAX_STAKE_PERCENT}% da banca\n"
-            f"🎯 *Kelly Criterion:* {int(Config.KELLY_FRACTION*100)}% conservador\n\n"
-            "✅ Sistema pronto\\! Monitorando jogos 24/7\\.\\.\\."
+            f"⚡ *EV mínimo:* \\+{int(Config.MIN_EV_PERCENT)}%\n"
+            f"💰 *Stake máximo:* {int(Config.MAX_STAKE_PERCENT)}% da banca\n"
+            f"🎯 *Kelly Criterion:* {int(Config.KELLY_FRACTION * 100)}% conservador\n\n"
+            "✅ Sistema pronto\\! Monitorando jogos 24/7"
         )
         send_telegram_notification(startup_message)
     except Exception as e:
