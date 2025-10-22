@@ -645,7 +645,7 @@ def main():
             f"📊 *Ligas monitoradas:* {len(Config.LEAGUES)}\n"
             f"⚡ *EV mínimo:* \\+{Config.MIN_EV_PERCENT}%\n"
             f"💰 *Stake máximo:* {Config.MAX_STAKE_PERCENT}% da banca\n"
-            f"🎯 *Kelly Criterion:* {Config.KELLY_FRACTION*100}% conservador\n\n"
+            f"🎯 *Kelly Criterion:* {int(Config.KELLY_FRACTION*100)}% conservador\n\n"
             "✅ Sistema pronto\\! Monitorando jogos 24/7\\.\\.\\."
         )
         send_telegram_notification(startup_message)
