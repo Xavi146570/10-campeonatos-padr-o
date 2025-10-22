@@ -1,9 +1,6 @@
 """
 Santo Graal Bot EV+ - Sistema de Detecção de Expected Value
-Versão com HTTP endpoint para Render Web Service (gratuito)
-CORREÇÃO: Telegram MarkdownV2 escape perfeito
-
-Monitora jogos 0-0 no HT e calcula probabilidades/EV para Over 0.5 e Over 1.5 FT
+VERSÃO FINAL CORRIGIDA - Detecta jogos ao vivo HT 0-0
 """
 
 import os
@@ -198,7 +195,7 @@ class SantoGraalBot:
         date_from = now.strftime('%Y-%m-%d')
         date_to = (now + timedelta(hours=hours_ahead)).strftime('%Y-%m-%d')
         
-        for league_id in Config.LEAGUES:
+        for league_id in Config.get_active_leagues():
             try:
                 url = f"{self.base_url}/fixtures"
                 params = {
@@ -227,6 +224,7 @@ class SantoGraalBot:
     def get_live_fixtures(self) -> List[Dict]:
         """
         Busca jogos ao vivo nas ligas configuradas
+        ⚠️ CRÍTICO: NÃO usar 'season' com 'live'!
         
         Returns:
             Lista de fixtures ao vivo
@@ -238,6 +236,7 @@ class SantoGraalBot:
                 url = f"{self.base_url}/fixtures"
                 params = {
                     'league': league_id,
+                    # NÃO INCLUIR 'season' aqui! API não aceita com 'live'
                     'live': 'all'
                 }
                 
@@ -247,6 +246,7 @@ class SantoGraalBot:
                     data = response.json()
                     if data.get('response'):
                         fixtures.extend(data['response'])
+                        logger.info(f"✅ Liga {league_id}: {len(data['response'])} jogos ao vivo")
                 else:
                     logger.warning(f"⚠️ Erro ao buscar live fixtures da liga {league_id}: {response.status_code}")
                 
@@ -601,6 +601,8 @@ class SantoGraalBot:
                 logger.info("🔴 Verificando jogos ao vivo...")
                 live = self.get_live_fixtures()
                 
+                logger.info(f"📊 Total de jogos ao vivo retornados: {len(live)}")
+                
                 # Filtrar apenas jogos 0-0 no HT
                 ht_0x0_fixtures = [f for f in live if self.is_halftime_0x0(f)]
                 
@@ -640,10 +642,9 @@ def main():
     
     try:
         # Enviar mensagem de inicialização
-        # CORREÇÃO: Escape MarkdownV2 perfeito - SEM pontos decimais
         startup_message = (
             "🤖 *Santo Graal Bot EV\\+ Iniciado\\!*\n\n"
-            f"📊 *Ligas monitoradas:* {len(Config.LEAGUES)}\n"
+            f"📊 *Ligas totais:* {len(Config.LEAGUES)}\n"
             f"⚡ *EV mínimo:* \\+{int(Config.MIN_EV_PERCENT)}%\n"
             f"💰 *Stake máximo:* {int(Config.MAX_STAKE_PERCENT)}% da banca\n"
             f"🎯 *Kelly Criterion:* {int(Config.KELLY_FRACTION * 100)}% conservador\n\n"
