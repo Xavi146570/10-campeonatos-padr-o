@@ -1,279 +1,369 @@
 """
-Calculador de Probabilidades para Santo Graal com EV+
-Adaptado do sistema Over 1.5 para calcular probabilidades no intervalo (HT 0-0)
+Calculador de Probabilidades para Santo Graal Bot EV+
+Sistema com 9 indicadores para calcular probabilidades Over 0.5 e Over 1.5
 """
 
 import math
-from typing import Dict, Tuple
-from datetime import datetime
-import config_santo_graal as config
+from typing import Dict, List, Tuple, Optional
+from config_santo_graal import Config
 
 
-class ProbabilityCalculatorSantoGraal:
+class ProbabilityCalculator:
     """
-    Calcula probabilidades de Over 0.5 e Over 1.5 quando jogo está 0-0 no intervalo.
-    Usa 9 indicadores ponderados + ajustes contextuais para HT.
+    Calcula probabilidades de Over 0.5 e Over 1.5 usando 9 indicadores:
+    
+    Indicadores Primários (50%):
+    1. Distribuição de Poisson (25%)
+    2. Taxa histórica Over (15%)
+    3. Tendência recente (10%)
+    
+    Indicadores Secundários (30%):
+    4. Head-to-Head (12%)
+    5. Força ofensiva (10%)
+    6. Tendência ofensiva (8%)
+    
+    Indicadores Contextuais (20%):
+    7. Fase da temporada (8%)
+    8. Motivação dos times (7%)
+    9. Importância do jogo (5%)
     """
     
     def __init__(self):
-        self.weights = config.PROBABILITY_WEIGHTS
-        self.ht_multipliers = config.HT_0_0_MULTIPLIERS
+        """Inicializa o calculador"""
+        self.weights = Config.PROBABILITY_WEIGHTS
     
-    def calculate_probabilities_at_ht(
-        self, 
-        home_stats: Dict, 
-        away_stats: Dict,
-        h2h_stats: Dict,
-        match_info: Dict
-    ) -> Dict[str, float]:
+    def calculate_probabilities(self, match_data: Dict) -> Tuple[float, float]:
         """
-        Calcula probabilidades Over 0.5 e Over 1.5 quando jogo está 0-0 no HT.
+        Calcula probabilidades Over 0.5 e Over 1.5
         
         Args:
-            home_stats: Estatísticas do time da casa
-            away_stats: Estatísticas do time visitante
-            h2h_stats: Estatísticas de confrontos diretos
-            match_info: Informações contextuais do jogo
+            match_data: Dicionário com dados do jogo:
+                - home_stats: Estatísticas do time da casa
+                - away_stats: Estatísticas do time visitante
+                - h2h: Lista de confrontos diretos
+                - is_ht_0x0: Boolean se está 0-0 no HT
         
         Returns:
-            Dict com probabilidades: {'over_0_5': float, 'over_1_5': float, 'confidence': float}
+            Tuple (prob_over_05, prob_over_15) em percentual (0-100)
         """
+        home_stats = match_data.get('home_stats', {})
+        away_stats = match_data.get('away_stats', {})
+        h2h = match_data.get('h2h', [])
+        is_ht_0x0 = match_data.get('is_ht_0x0', False)
         
-        # Calcular gols esperados para o 2º tempo
-        expected_goals_2h = self._calculate_expected_goals_2h(home_stats, away_stats)
-        
-        # 1. INDICADORES PRIMÁRIOS (50%)
-        prob_poisson_0_5 = self._poisson_probability_over_n(expected_goals_2h, 0.5)
-        prob_poisson_1_5 = self._poisson_probability_over_n(expected_goals_2h, 1.5)
-        
-        prob_historical_0_5 = self._historical_rate(home_stats, away_stats, 0.5)
-        prob_historical_1_5 = self._historical_rate(home_stats, away_stats, 1.5)
-        
-        prob_recent_0_5 = self._recent_trend(home_stats, away_stats, 0.5)
-        prob_recent_1_5 = self._recent_trend(home_stats, away_stats, 1.5)
-        
-        # 2. INDICADORES SECUNDÁRIOS (30%)
-        prob_h2h_0_5, prob_h2h_1_5 = self._h2h_analysis(h2h_stats)
-        
-        prob_offensive = self._offensive_strength(home_stats, away_stats)
-        
-        prob_offensive_trend_0_5 = self._offensive_trend(home_stats, away_stats, 0.5)
-        prob_offensive_trend_1_5 = self._offensive_trend(home_stats, away_stats, 1.5)
-        
-        # 3. INDICADORES CONTEXTUAIS (20%)
-        prob_season_phase = self._season_phase_factor(match_info)
-        prob_motivation = self._motivation_factor(match_info)
-        prob_importance = self._match_importance(match_info)
-        
-        # CÁLCULO PONDERADO - OVER 0.5
-        prob_over_0_5_base = (
-            prob_poisson_0_5 * self.weights['poisson'] +
-            prob_historical_0_5 * self.weights['historical_rate'] +
-            prob_recent_0_5 * self.weights['recent_trend'] +
-            prob_h2h_0_5 * self.weights['h2h'] +
-            prob_offensive * self.weights['offensive_strength'] +
-            prob_offensive_trend_0_5 * self.weights['offensive_trend'] +
-            prob_season_phase * self.weights['season_phase'] +
-            prob_motivation * self.weights['motivation'] +
-            prob_importance * self.weights['match_importance']
-        )
-        
-        # CÁLCULO PONDERADO - OVER 1.5
-        prob_over_1_5_base = (
-            prob_poisson_1_5 * self.weights['poisson'] +
-            prob_historical_1_5 * self.weights['historical_rate'] +
-            prob_recent_1_5 * self.weights['recent_trend'] +
-            prob_h2h_1_5 * self.weights['h2h'] +
-            prob_offensive * self.weights['offensive_strength'] +
-            prob_offensive_trend_1_5 * self.weights['offensive_trend'] +
-            prob_season_phase * self.weights['season_phase'] +
-            prob_motivation * self.weights['motivation'] +
-            prob_importance * self.weights['match_importance']
-        )
-        
-        # APLICAR MULTIPLICADORES DE HT 0-0
-        # 2º tempo tende a ser mais aberto quando está 0-0 no intervalo
-        prob_over_0_5 = min(prob_over_0_5_base * self.ht_multipliers['over_0_5'], 0.98)
-        prob_over_1_5 = min(prob_over_1_5_base * self.ht_multipliers['over_1_5'], 0.95)
-        
-        # Calcular confiança (baseada em consistência dos indicadores)
-        confidence = self._calculate_confidence(
-            [prob_poisson_0_5, prob_historical_0_5, prob_recent_0_5, prob_h2h_0_5],
-            [prob_poisson_1_5, prob_historical_1_5, prob_recent_1_5, prob_h2h_1_5]
-        )
-        
-        return {
-            'over_0_5': round(prob_over_0_5, 4),
-            'over_1_5': round(prob_over_1_5, 4),
-            'confidence': round(confidence, 4),
-            'expected_goals_2h': round(expected_goals_2h, 2)
+        # Calcular cada indicador
+        indicators = {
+            'poisson': self._calculate_poisson_probability(home_stats, away_stats),
+            'historical_rate': self._calculate_historical_rate(home_stats, away_stats),
+            'recent_trend': self._calculate_recent_trend(home_stats, away_stats),
+            'h2h': self._calculate_h2h_probability(h2h),
+            'offensive_strength': self._calculate_offensive_strength(home_stats, away_stats),
+            'offensive_trend': self._calculate_offensive_trend(home_stats, away_stats),
+            'season_phase': self._calculate_season_phase(home_stats, away_stats),
+            'motivation': self._calculate_motivation(home_stats, away_stats),
+            'match_importance': self._calculate_match_importance(home_stats, away_stats),
         }
+        
+        # Calcular probabilidade ponderada
+        prob_over_05 = sum(
+            indicators[key][0] * self.weights[key] 
+            for key in indicators.keys()
+        )
+        
+        prob_over_15 = sum(
+            indicators[key][1] * self.weights[key] 
+            for key in indicators.keys()
+        )
+        
+        # Aplicar multiplicadores se estiver 0-0 no HT
+        if is_ht_0x0:
+            prob_over_05 *= Config.HT_0X0_MULTIPLIER_OVER_05
+            prob_over_15 *= Config.HT_0X0_MULTIPLIER_OVER_15
+        
+        # Garantir que está no range 0-100
+        prob_over_05 = max(0, min(100, prob_over_05))
+        prob_over_15 = max(0, min(100, prob_over_15))
+        
+        return prob_over_05, prob_over_15
     
-    def _calculate_expected_goals_2h(self, home_stats: Dict, away_stats: Dict) -> float:
+    def _calculate_poisson_probability(
+        self, 
+        home_stats: Dict, 
+        away_stats: Dict
+    ) -> Tuple[float, float]:
         """
-        Calcula gols esperados para o 2º tempo baseado em:
-        - Média de gols/jogo dos times
-        - Taxa de gols no 2º tempo historicamente
-        - Ajuste para situação 0-0 no HT (times tendem a atacar mais)
-        """
-        home_goals_avg = home_stats.get('goals_per_game', 1.5)
-        away_goals_avg = away_stats.get('goals_per_game', 1.5)
-        
-        # Média de gols esperados por jogo
-        total_goals_avg = (home_goals_avg + away_goals_avg) / 2
-        
-        # Ajuste: 2º tempo costuma ter ~55% dos gols do jogo
-        second_half_factor = 0.55
-        
-        # Ajuste adicional: quando 0-0 no HT, times atacam mais (+15%)
-        ht_0_0_boost = 1.15
-        
-        expected_goals = total_goals_avg * second_half_factor * ht_0_0_boost
-        
-        return max(expected_goals, 0.8)  # Mínimo de 0.8 gols esperados
-    
-    def _poisson_probability_over_n(self, lambda_: float, n: float) -> float:
-        """
-        Calcula P(X > n) usando distribuição de Poisson.
-        P(Over 0.5) = 1 - P(X ≤ 0) = 1 - e^(-λ)
-        P(Over 1.5) = 1 - P(X ≤ 1) = 1 - e^(-λ) × (1 + λ)
+        Indicador 1: Distribuição de Poisson (25%)
+        Calcula probabilidade baseada em média de gols
         """
         try:
-            if n == 0.5:
-                # P(Over 0.5) = P(X ≥ 1)
-                prob = 1 - math.exp(-lambda_)
-            elif n == 1.5:
-                # P(Over 1.5) = P(X ≥ 2)
-                prob = 1 - (math.exp(-lambda_) * (1 + lambda_))
+            # Extrair médias de gols
+            home_goals = home_stats.get('goals', {}).get('for', {}).get('average', {})
+            away_goals = away_stats.get('goals', {}).get('for', {}).get('average', {})
+            
+            home_avg = float(home_goals.get('total', 1.5))
+            away_avg = float(away_goals.get('total', 1.5))
+            
+            # Média de gols esperados no jogo
+            expected_goals = (home_avg + away_avg) / 2
+            
+            # Poisson: P(X > k) = 1 - P(X <= k)
+            prob_0_goals = math.exp(-expected_goals)
+            prob_1_goal = expected_goals * math.exp(-expected_goals)
+            
+            prob_over_05 = (1 - prob_0_goals) * 100
+            prob_over_15 = (1 - prob_0_goals - prob_1_goal) * 100
+            
+            return prob_over_05, prob_over_15
+        
+        except Exception:
+            # Fallback: valores conservadores
+            return 75.0, 55.0
+    
+    def _calculate_historical_rate(
+        self, 
+        home_stats: Dict, 
+        away_stats: Dict
+    ) -> Tuple[float, float]:
+        """
+        Indicador 2: Taxa histórica Over (15%)
+        Baseado em jogos anteriores dos times
+        """
+        try:
+            home_fixtures = home_stats.get('fixtures', {}).get('played', {}).get('total', 0)
+            away_fixtures = away_stats.get('fixtures', {}).get('played', {}).get('total', 0)
+            
+            if home_fixtures == 0 or away_fixtures == 0:
+                return 70.0, 50.0
+            
+            # Contar jogos com Over 0.5 e Over 1.5
+            home_goals_total = home_stats.get('goals', {}).get('for', {}).get('total', {}).get('total', 0)
+            away_goals_total = away_stats.get('goals', {}).get('for', {}).get('total', {}).get('total', 0)
+            
+            # Taxa Over 0.5 (jogos com pelo menos 1 gol)
+            home_over_05_rate = (home_goals_total / home_fixtures) if home_fixtures > 0 else 0.7
+            away_over_05_rate = (away_goals_total / away_fixtures) if away_fixtures > 0 else 0.7
+            
+            prob_over_05 = ((home_over_05_rate + away_over_05_rate) / 2) * 100
+            
+            # Taxa Over 1.5 (estimativa: ~70% da taxa Over 0.5)
+            prob_over_15 = prob_over_05 * 0.70
+            
+            return prob_over_05, prob_over_15
+        
+        except Exception:
+            return 70.0, 50.0
+    
+    def _calculate_recent_trend(
+        self, 
+        home_stats: Dict, 
+        away_stats: Dict
+    ) -> Tuple[float, float]:
+        """
+        Indicador 3: Tendência recente (10%)
+        Últimos 5 jogos dos times
+        """
+        try:
+            # Usar forma recente (últimos 5 jogos)
+            home_form = home_stats.get('form', 'WWDWW')[-5:]
+            away_form = away_stats.get('form', 'WWDWW')[-5:]
+            
+            # W = 3 pontos, D = 1 ponto, L = 0 pontos
+            def form_score(form_str):
+                points = {'W': 3, 'D': 1, 'L': 0}
+                return sum(points.get(c, 1) for c in form_str)
+            
+            home_form_score = form_score(home_form)
+            away_form_score = form_score(away_form)
+            
+            # Times em boa forma tendem a marcar mais
+            avg_form = (home_form_score + away_form_score) / 30  # Máximo 30 pontos (5W+5W)
+            
+            prob_over_05 = 60 + (avg_form * 30)  # Range: 60-90%
+            prob_over_15 = 40 + (avg_form * 30)  # Range: 40-70%
+            
+            return prob_over_05, prob_over_15
+        
+        except Exception:
+            return 70.0, 50.0
+    
+    def _calculate_h2h_probability(self, h2h_matches: List[Dict]) -> Tuple[float, float]:
+        """
+        Indicador 4: Head-to-Head (12%)
+        Histórico de confrontos diretos
+        """
+        try:
+            if not h2h_matches:
+                return 70.0, 50.0
+            
+            total_goals = 0
+            games_over_05 = 0
+            games_over_15 = 0
+            
+            for match in h2h_matches[:10]:  # Últimos 10 confrontos
+                score = match.get('score', {}).get('fulltime', {})
+                home = score.get('home', 0)
+                away = score.get('away', 0)
+                
+                if home is not None and away is not None:
+                    game_goals = home + away
+                    total_goals += game_goals
+                    
+                    if game_goals > 0:
+                        games_over_05 += 1
+                    if game_goals > 1:
+                        games_over_15 += 1
+            
+            num_matches = len(h2h_matches[:10])
+            
+            if num_matches > 0:
+                prob_over_05 = (games_over_05 / num_matches) * 100
+                prob_over_15 = (games_over_15 / num_matches) * 100
             else:
-                prob = 0.5
+                prob_over_05 = 70.0
+                prob_over_15 = 50.0
             
-            return max(0.01, min(0.99, prob))
-        except:
-            return 0.5
+            return prob_over_05, prob_over_15
+        
+        except Exception:
+            return 70.0, 50.0
     
-    def _historical_rate(self, home_stats: Dict, away_stats: Dict, threshold: float) -> float:
-        """Taxa histórica de Over N.5 dos dois times"""
-        if threshold == 0.5:
-            home_rate = home_stats.get('over_0_5_rate', 0.85)
-            away_rate = away_stats.get('over_0_5_rate', 0.85)
-        else:  # 1.5
-            home_rate = home_stats.get('over_1_5_rate', 0.70)
-            away_rate = away_stats.get('over_1_5_rate', 0.70)
-        
-        return (home_rate + away_rate) / 2
-    
-    def _recent_trend(self, home_stats: Dict, away_stats: Dict, threshold: float) -> float:
-        """Tendência dos últimos 5 jogos"""
-        if threshold == 0.5:
-            home_trend = home_stats.get('recent_over_0_5_rate', 0.80)
-            away_trend = away_stats.get('recent_over_0_5_rate', 0.80)
-        else:
-            home_trend = home_stats.get('recent_over_1_5_rate', 0.65)
-            away_trend = away_stats.get('recent_over_1_5_rate', 0.65)
-        
-        return (home_trend + away_trend) / 2
-    
-    def _h2h_analysis(self, h2h_stats: Dict) -> Tuple[float, float]:
-        """Análise de confrontos diretos"""
-        over_0_5 = h2h_stats.get('over_0_5_rate', 0.80)
-        over_1_5 = h2h_stats.get('over_1_5_rate', 0.65)
-        
-        # Se não há histórico suficiente, usar valores neutros
-        if h2h_stats.get('total_games', 0) < 3:
-            over_0_5 = 0.75
-            over_1_5 = 0.60
-        
-        return over_0_5, over_1_5
-    
-    def _offensive_strength(self, home_stats: Dict, away_stats: Dict) -> float:
-        """Força ofensiva combinada dos times"""
-        home_attack = home_stats.get('offensive_rating', 50) / 100
-        away_attack = away_stats.get('offensive_rating', 50) / 100
-        
-        return (home_attack + away_attack) / 2
-    
-    def _offensive_trend(self, home_stats: Dict, away_stats: Dict, threshold: float) -> float:
-        """Tendência ofensiva recente"""
-        home_goals_last_5 = home_stats.get('goals_last_5', 6) / 5  # média
-        away_goals_last_5 = away_stats.get('goals_last_5', 6) / 5
-        
-        avg_goals = (home_goals_last_5 + away_goals_last_5) / 2
-        
-        if threshold == 0.5:
-            return min(avg_goals / 1.5, 0.95)  # Normalizar para 0-1
-        else:
-            return min(avg_goals / 2.5, 0.90)
-    
-    def _season_phase_factor(self, match_info: Dict) -> float:
+    def _calculate_offensive_strength(
+        self, 
+        home_stats: Dict, 
+        away_stats: Dict
+    ) -> Tuple[float, float]:
         """
-        Fase da temporada afeta quantidade de gols:
-        - Início: times mais cautelosos (0.65)
-        - Meio: fase consolidada (0.75)
-        - Final: jogos decisivos (0.85)
-        """
-        games_played = match_info.get('games_played', 15)
-        
-        if games_played < 8:
-            return 0.65
-        elif games_played < 25:
-            return 0.75
-        else:
-            return 0.85
-    
-    def _motivation_factor(self, match_info: Dict) -> float:
-        """
-        Motivação dos times (posição na tabela, objetivos):
-        - Times brigando por título/vaga europeia: mais ofensivos (0.80)
-        - Times no meio da tabela: neutro (0.70)
-        - Times lutando contra rebaixamento: variável (0.65)
-        """
-        home_position = match_info.get('home_position', 10)
-        away_position = match_info.get('away_position', 10)
-        
-        # Times no topo (1-6) ou fundo (15-20) = mais motivação
-        if (home_position <= 6 or away_position <= 6):
-            return 0.80
-        elif (home_position >= 15 or away_position >= 15):
-            return 0.70
-        else:
-            return 0.65
-    
-    def _match_importance(self, match_info: Dict) -> float:
-        """
-        Importância do jogo:
-        - Derby/clássico: máxima intensidade (0.85)
-        - Jogo normal: intensidade média (0.70)
-        """
-        is_derby = match_info.get('is_derby', False)
-        
-        if is_derby:
-            return 0.85
-        else:
-            return 0.70
-    
-    def _calculate_confidence(self, indicators_0_5: list, indicators_1_5: list) -> float:
-        """
-        Calcula confiança baseada na consistência dos indicadores.
-        Menor desvio padrão = maior confiança
+        Indicador 5: Força ofensiva (10%)
+        Capacidade de marcar gols dos times
         """
         try:
-            # Calcular desvio padrão dos indicadores
-            avg_0_5 = sum(indicators_0_5) / len(indicators_0_5)
-            variance_0_5 = sum((x - avg_0_5) ** 2 for x in indicators_0_5) / len(indicators_0_5)
-            std_dev_0_5 = math.sqrt(variance_0_5)
+            home_goals_avg = float(
+                home_stats.get('goals', {}).get('for', {}).get('average', {}).get('total', 1.5)
+            )
+            away_goals_avg = float(
+                away_stats.get('goals', {}).get('for', {}).get('average', {}).get('total', 1.5)
+            )
             
-            avg_1_5 = sum(indicators_1_5) / len(indicators_1_5)
-            variance_1_5 = sum((x - avg_1_5) ** 2 for x in indicators_1_5) / len(indicators_1_5)
-            std_dev_1_5 = math.sqrt(variance_1_5)
+            combined_avg = home_goals_avg + away_goals_avg
             
-            # Média dos desvios
-            avg_std_dev = (std_dev_0_5 + std_dev_1_5) / 2
+            # Normalizar para 0-100
+            # Média alta (>3.0) = alta probabilidade
+            prob_over_05 = min(95, 50 + (combined_avg * 15))
+            prob_over_15 = min(85, 30 + (combined_avg * 15))
             
-            # Converter para confiança (menor desvio = maior confiança)
-            # Desvio 0 = 100% confiança, Desvio 0.3 = 40% confiança
-            confidence = max(0.4, 1.0 - (avg_std_dev * 2))
+            return prob_over_05, prob_over_15
+        
+        except Exception:
+            return 70.0, 50.0
+    
+    def _calculate_offensive_trend(
+        self, 
+        home_stats: Dict, 
+        away_stats: Dict
+    ) -> Tuple[float, float]:
+        """
+        Indicador 6: Tendência ofensiva (8%)
+        Se os times estão marcando mais/menos recentemente
+        """
+        try:
+            # Comparar gols home vs away
+            home_goals_home = float(
+                home_stats.get('goals', {}).get('for', {}).get('average', {}).get('home', 1.5)
+            )
+            away_goals_away = float(
+                away_stats.get('goals', {}).get('for', {}).get('average', {}).get('away', 1.5)
+            )
             
-            return confidence
-        except:
-            return 0.6  # Confiança padrão
+            # Casa marca mais em casa + Visitante marca fora = bom sinal
+            combined = home_goals_home + away_goals_away
+            
+            prob_over_05 = min(95, 50 + (combined * 15))
+            prob_over_15 = min(85, 30 + (combined * 15))
+            
+            return prob_over_05, prob_over_15
+        
+        except Exception:
+            return 70.0, 50.0
+    
+    def _calculate_season_phase(
+        self, 
+        home_stats: Dict, 
+        away_stats: Dict
+    ) -> Tuple[float, float]:
+        """
+        Indicador 7: Fase da temporada (8%)
+        Início/meio/fim da temporada afeta comportamento
+        """
+        try:
+            home_played = home_stats.get('fixtures', {}).get('played', {}).get('total', 10)
+            away_played = away_stats.get('fixtures', {}).get('played', {}).get('total', 10)
+            
+            avg_played = (home_played + away_played) / 2
+            
+            # Início temporada (< 10 jogos): times mais cautelosos
+            # Meio temporada (10-25 jogos): jogos mais abertos
+            # Final temporada (> 25 jogos): depende de objetivos
+            
+            if avg_played < 10:
+                return 65.0, 45.0  # Início: mais cauteloso
+            elif avg_played < 25:
+                return 75.0, 55.0  # Meio: mais aberto
+            else:
+                return 70.0, 50.0  # Final: médio
+        
+        except Exception:
+            return 70.0, 50.0
+    
+    def _calculate_motivation(
+        self, 
+        home_stats: Dict, 
+        away_stats: Dict
+    ) -> Tuple[float, float]:
+        """
+        Indicador 8: Motivação dos times (7%)
+        Times lutando por objetivos jogam diferente
+        """
+        try:
+            # Baseado na posição na tabela (aproximação)
+            home_rank = home_stats.get('league', {}).get('rank', 10)
+            away_rank = away_stats.get('league', {}).get('rank', 10)
+            
+            # Times brigando por título/rebaixamento: mais intenso
+            # Times meio de tabela: menos intenso
+            
+            avg_rank = (home_rank + away_rank) / 2
+            
+            if avg_rank <= 6 or avg_rank >= 15:
+                # Times com objetivos claros: mais gols
+                return 75.0, 55.0
+            else:
+                # Meio de tabela: médio
+                return 70.0, 50.0
+        
+        except Exception:
+            return 70.0, 50.0
+    
+    def _calculate_match_importance(
+        self, 
+        home_stats: Dict, 
+        away_stats: Dict
+    ) -> Tuple[float, float]:
+        """
+        Indicador 9: Importância do jogo (5%)
+        Derbies, clássicos, jogos decisivos
+        """
+        try:
+            # Simplificado: baseado na diferença de ranking
+            home_rank = home_stats.get('league', {}).get('rank', 10)
+            away_rank = away_stats.get('league', {}).get('rank', 10)
+            
+            rank_diff = abs(home_rank - away_rank)
+            
+            # Times equilibrados (rank_diff pequeno): jogo mais disputado
+            if rank_diff <= 3:
+                return 75.0, 55.0
+            else:
+                return 70.0, 50.0
+        
+        except Exception:
+            return 70.0, 50.0
