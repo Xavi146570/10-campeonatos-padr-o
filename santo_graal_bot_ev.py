@@ -1,554 +1,659 @@
 """
-Santo Graal Bot com Detecção de Expected Value (EV+)
-Versão aprimorada: mantém funcionalidade original + adiciona análise EV no HT 0-0
+Santo Graal Bot EV+ - Sistema de Detecção de Expected Value
+Versão com HTTP endpoint para Render Web Service (gratuito)
+
+Monitora jogos 0-0 no HT e calcula probabilidades/EV para Over 0.5 e Over 1.5 FT
 """
 
-import requests
+import os
+import sys
 import time
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+import requests
 import logging
+from datetime import datetime, timezone, timedelta
+from typing import Dict, List, Optional, Tuple
+from dotenv import load_dotenv
 
-import config_santo_graal as config
-from probability_calculator_santo_graal import ProbabilityCalculatorSantoGraal
-from ev_detector_santo_graal import EVDetectorSantoGraal
+# Imports para HTTP endpoint (Render Web Service)
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from threading import Thread
 
+# Imports locais
+from config_santo_graal import Config
+from probability_calculator_santo_graal import ProbabilityCalculator
+from ev_detector_santo_graal import EVDetector
 
-# Configurar logging
+# Carregar variáveis de ambiente
+load_dotenv()
+
+# Configuração de logging
 logging.basicConfig(
-    level=getattr(logging, config.LOG_LEVEL),
-    format=config.LOG_FORMAT
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
 
-class SantoGraalBotEV:
-    """
-    Bot Santo Graal com detecção de Expected Value.
+# ============================================================
+# HTTP Health Check para Render Web Service
+# ============================================================
+
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    """Handler para health check - mantém Render Web Service ativo"""
     
-    Funcionalidades:
-    1. Monitora times com baixa taxa de empate 0x0 (funcionalidade original)
-    2. Verifica jogos 30 min antes do início
-    3. Acompanha jogos ao vivo que estão 0-0
-    4. Quando detecta HT 0-0, calcula EV+ para Over 0.5 e Over 1.5
-    5. Envia notificação Telegram se odds são EV+
+    def do_GET(self):
+        """Responde a requisições GET com status do bot"""
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html; charset=utf-8')
+        self.end_headers()
+        
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Santo Graal Bot EV+</title>
+            <meta charset="UTF-8">
+            <style>
+                body { 
+                    font-family: 'Segoe UI', Arial, sans-serif;
+                    text-align: center; 
+                    padding: 50px;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    margin: 0;
+                }
+                .container {
+                    background: rgba(255,255,255,0.15);
+                    backdrop-filter: blur(10px);
+                    padding: 40px;
+                    border-radius: 20px;
+                    display: inline-block;
+                    box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+                }
+                h1 { margin: 0 0 20px 0; font-size: 2.5em; }
+                .status { 
+                    font-size: 1.2em; 
+                    margin: 15px 0;
+                    padding: 10px;
+                    background: rgba(255,255,255,0.1);
+                    border-radius: 10px;
+                }
+                .emoji { font-size: 3em; margin: 20px 0; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="emoji">🤖⚽</div>
+                <h1>Santo Graal Bot EV+</h1>
+                <div class="status">✅ Bot está ONLINE e funcionando!</div>
+                <div class="status">🔄 Monitorando jogos 24/7</div>
+                <div class="status">📊 Detectando oportunidades EV+</div>
+            </div>
+        </body>
+        </html>
+        """
+        self.wfile.write(html.encode('utf-8'))
+    
+    def log_message(self, format, *args):
+        """Silenciar logs HTTP para não poluir console"""
+        pass
+
+
+def run_health_check_server():
+    """Inicia servidor HTTP na porta especificada (10000 no Render)"""
+    port = int(os.getenv('PORT', 10000))
+    try:
+        server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+        logger.info(f"🌐 Servidor HTTP iniciado na porta {port}")
+        server.serve_forever()
+    except Exception as e:
+        logger.error(f"❌ Erro ao iniciar servidor HTTP: {e}")
+
+
+# ============================================================
+# Funções Auxiliares
+# ============================================================
+
+def send_telegram_notification(message: str) -> bool:
     """
+    Envia notificação via Telegram
+    
+    Args:
+        message: Mensagem a enviar (suporta Markdown)
+    
+    Returns:
+        True se enviado com sucesso, False caso contrário
+    """
+    try:
+        token = os.getenv('TELEGRAM_BOT_TOKEN')
+        chat_id = os.getenv('TELEGRAM_CHAT_ID')
+        
+        if not token or not chat_id:
+            logger.error("❌ TELEGRAM_BOT_TOKEN ou TELEGRAM_CHAT_ID não configurados")
+            return False
+        
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        
+        payload = {
+            'chat_id': chat_id,
+            'text': message,
+            'parse_mode': 'MarkdownV2',
+            'disable_web_page_preview': True
+        }
+        
+        response = requests.post(url, json=payload, timeout=10)
+        
+        if response.status_code == 200:
+            return True
+        else:
+            logger.error(f"❌ Erro ao enviar Telegram: {response.text}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Exceção ao enviar Telegram: {e}")
+        return False
+
+
+# ============================================================
+# Classe Principal do Bot
+# ============================================================
+
+class SantoGraalBot:
+    """Bot principal que monitora jogos e detecta oportunidades EV+"""
     
     def __init__(self):
-        self.api_key = config.API_FOOTBALL_KEY
-        self.telegram_token = config.TELEGRAM_BOT_TOKEN
-        self.telegram_chat_id = config.TELEGRAM_CHAT_ID
-        self.base_url = "https://v3.football.api-sports.io"
+        """Inicializa o bot"""
+        self.api_key = os.getenv('API_FOOTBALL_KEY')
         
-        # Inicializar componentes de análise EV
-        self.prob_calculator = ProbabilityCalculatorSantoGraal()
-        self.ev_detector = EVDetectorSantoGraal()
+        if not self.api_key:
+            raise ValueError("❌ API_FOOTBALL_KEY não encontrada no .env")
+        
+        self.base_url = "https://v3.football.api-sports.io"
+        self.headers = {
+            'x-apisports-key': self.api_key
+        }
+        
+        self.probability_calculator = ProbabilityCalculator()
+        self.ev_detector = EVDetector()
         
         # Cache para evitar notificações duplicadas
-        self.notified_matches = set()
-        
-        # Validar credenciais
-        if not self.api_key or not self.telegram_token or not self.telegram_chat_id:
-            raise ValueError("Credenciais API não configuradas! Verifique .env")
+        self.notified_fixtures = set()
         
         logger.info("Santo Graal Bot EV+ inicializado")
     
-    def run(self):
-        """Loop principal do bot"""
-        logger.info("🚀 Santo Graal Bot EV+ iniciado!")
-        self.send_telegram_message("🤖 Santo Graal Bot EV+ ATIVO\n\nMonitorando jogos com baixa taxa 0x0...")
+    def get_upcoming_fixtures(self, hours_ahead: int = 24) -> List[Dict]:
+        """
+        Busca jogos próximos nas ligas configuradas
         
-        while True:
+        Args:
+            hours_ahead: Quantas horas à frente buscar
+        
+        Returns:
+            Lista de fixtures
+        """
+        fixtures = []
+        
+        now = datetime.now(timezone.utc)
+        date_from = now.strftime('%Y-%m-%d')
+        date_to = (now + timedelta(hours=hours_ahead)).strftime('%Y-%m-%d')
+        
+        for league_id in Config.LEAGUES:
             try:
-                # 1. VERIFICAR JOGOS PRÓXIMOS (30 min antes)
-                upcoming_matches = self.get_upcoming_matches()
-                logger.info(f"Encontrados {len(upcoming_matches)} jogos próximos")
-                
-                for match in upcoming_matches:
-                    self.analyze_upcoming_match(match)
-                
-                # 2. VERIFICAR JOGOS AO VIVO (0-0)
-                live_matches = self.get_live_matches_0_0()
-                logger.info(f"Encontrados {len(live_matches)} jogos ao vivo 0-0")
-                
-                for match in live_matches:
-                    # Verificar se está no intervalo
-                    if self.is_halftime(match):
-                        self.analyze_ht_0_0(match)
-                
-                # Aguardar antes da próxima verificação
-                time.sleep(config.HT_CHECK_INTERVAL)
-                
-            except Exception as e:
-                logger.error(f"Erro no loop principal: {e}", exc_info=True)
-                time.sleep(60)  # Aguardar 1 min em caso de erro
-    
-    def get_upcoming_matches(self) -> List[Dict]:
-        """
-        Busca jogos que começam nos próximos 30 minutos
-        (Funcionalidade original do Santo Graal)
-        """
-        try:
-            now = datetime.utcnow()
-            start_time = now + timedelta(minutes=25)
-            end_time = now + timedelta(minutes=35)
-            
-            matches = []
-            
-            for league_id in config.LEAGUES.keys():
                 url = f"{self.base_url}/fixtures"
                 params = {
                     'league': league_id,
-                    'season': self._get_current_season(),
-                    'from': start_time.strftime('%Y-%m-%d'),
-                    'to': end_time.strftime('%Y-%m-%d')
+                    'season': Config.SEASON,
+                    'from': date_from,
+                    'to': date_to
                 }
                 
-                response = self._make_api_request(url, params)
+                response = requests.get(url, headers=self.headers, params=params, timeout=10)
                 
-                if response and response.get('results', 0) > 0:
-                    fixtures = response.get('response', [])
-                    matches.extend(fixtures)
-            
-            return matches
-            
-        except Exception as e:
-            logger.error(f"Erro ao buscar jogos próximos: {e}")
-            return []
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('response'):
+                        fixtures.extend(data['response'])
+                else:
+                    logger.warning(f"⚠️ Erro ao buscar fixtures da liga {league_id}: {response.status_code}")
+                
+                time.sleep(0.5)  # Rate limiting
+                
+            except Exception as e:
+                logger.error(f"❌ Exceção ao buscar fixtures da liga {league_id}: {e}")
+        
+        return fixtures
     
-    def get_live_matches_0_0(self) -> List[Dict]:
+    def get_live_fixtures(self) -> List[Dict]:
         """
-        Busca jogos ao vivo com placar 0-0
+        Busca jogos ao vivo nas ligas configuradas
+        
+        Returns:
+            Lista de fixtures ao vivo
         """
-        try:
-            matches = []
-            
-            for league_id in config.LEAGUES.keys():
+        fixtures = []
+        
+        for league_id in Config.LEAGUES:
+            try:
                 url = f"{self.base_url}/fixtures"
                 params = {
                     'league': league_id,
-                    'season': self._get_current_season(),
+                    'season': Config.SEASON,
                     'live': 'all'
                 }
                 
-                response = self._make_api_request(url, params)
+                response = requests.get(url, headers=self.headers, params=params, timeout=10)
                 
-                if response and response.get('results', 0) > 0:
-                    fixtures = response.get('response', [])
-                    
-                    # Filtrar apenas 0-0
-                    for fixture in fixtures:
-                        score = fixture.get('goals', {})
-                        if score.get('home') == 0 and score.get('away') == 0:
-                            matches.append(fixture)
-            
-            return matches
-            
-        except Exception as e:
-            logger.error(f"Erro ao buscar jogos ao vivo: {e}")
-            return []
-    
-    def is_halftime(self, match: Dict) -> bool:
-        """Verifica se jogo está no intervalo (HT)"""
-        status = match.get('fixture', {}).get('status', {}).get('short', '')
-        return status == 'HT'
-    
-    def analyze_upcoming_match(self, match: Dict):
-        """
-        Analisa jogo próximo verificando taxa de empate 0x0 dos times
-        (Funcionalidade original do Santo Graal)
-        """
-        try:
-            fixture = match.get('fixture', {})
-            teams = match.get('teams', {})
-            
-            home_team = teams.get('home', {}).get('name', 'N/A')
-            away_team = teams.get('away', {}).get('name', 'N/A')
-            match_id = fixture.get('id')
-            
-            # Verificar se já analisamos este jogo
-            if match_id in self.notified_matches:
-                return
-            
-            # Buscar estatísticas dos times
-            home_stats = self.get_team_stats(teams.get('home', {}).get('id'))
-            away_stats = self.get_team_stats(teams.get('away', {}).get('id'))
-            
-            if not home_stats or not away_stats:
-                return
-            
-            # Verificar taxa de empate 0x0
-            home_draw_rate = home_stats.get('draw_0x0_rate', 1.0)
-            away_draw_rate = away_stats.get('draw_0x0_rate', 1.0)
-            
-            # Se ambos times têm BAIXA taxa de 0x0, é candidato para Santo Graal
-            if (home_draw_rate <= config.MAX_DRAW_0X0_RATE and 
-                away_draw_rate <= config.MAX_DRAW_0X0_RATE):
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('response'):
+                        fixtures.extend(data['response'])
+                else:
+                    logger.warning(f"⚠️ Erro ao buscar live fixtures da liga {league_id}: {response.status_code}")
                 
-                logger.info(f"✅ Candidato Santo Graal: {home_team} vs {away_team}")
-                logger.info(f"   Taxa 0x0: Casa {home_draw_rate:.1%} | Fora {away_draw_rate:.1%}")
+                time.sleep(0.5)  # Rate limiting
                 
-                # Marcar como notificado
-                self.notified_matches.add(match_id)
-                
-                # Enviar notificação
-                msg = f"⚽ **SANTO GRAAL - Jogo Identificado**\n\n"
-                msg += f"**{home_team} vs {away_team}**\n"
-                msg += f"Liga: {config.LEAGUES.get(match.get('league', {}).get('id'), 'N/A')}\n"
-                msg += f"Início: {fixture.get('date', 'N/A')}\n\n"
-                msg += f"📊 **Taxa Empate 0x0:**\n"
-                msg += f"• {home_team}: {home_draw_rate:.1%}\n"
-                msg += f"• {away_team}: {away_draw_rate:.1%}\n\n"
-                msg += f"🔍 Bot acompanhará ao vivo para análise EV+ no HT 0-0"
-                
-                self.send_telegram_message(msg)
-                
-        except Exception as e:
-            logger.error(f"Erro ao analisar jogo próximo: {e}")
-    
-    def analyze_ht_0_0(self, match: Dict):
-        """
-        ANÁLISE PRINCIPAL NO HT 0-0 COM DETECÇÃO DE EV+
+            except Exception as e:
+                logger.error(f"❌ Exceção ao buscar live fixtures da liga {league_id}: {e}")
         
-        Quando jogo chega ao intervalo 0-0:
-        1. Calcula probabilidades Over 0.5 e Over 1.5 para o 2º tempo
-        2. Busca odds disponíveis
-        3. Calcula Expected Value (EV)
-        4. Se EV+, envia notificação com recomendação
+        return fixtures
+    
+    def get_fixture_statistics(self, fixture_id: int) -> Optional[Dict]:
+        """
+        Busca estatísticas de um jogo específico
+        
+        Args:
+            fixture_id: ID do jogo
+        
+        Returns:
+            Dicionário com estatísticas ou None
         """
         try:
-            fixture = match.get('fixture', {})
-            teams = match.get('teams', {})
-            league = match.get('league', {})
+            url = f"{self.base_url}/fixtures/statistics"
+            params = {'fixture': fixture_id}
             
-            match_id = fixture.get('id')
-            home_team = teams.get('home', {}).get('name', 'N/A')
-            away_team = teams.get('away', {}).get('name', 'N/A')
+            response = requests.get(url, headers=self.headers, params=params, timeout=10)
             
-            # Verificar se já notificamos este HT 0-0
-            ht_key = f"HT_{match_id}"
-            if ht_key in self.notified_matches:
-                return
-            
-            logger.info(f"🔍 Analisando HT 0-0: {home_team} vs {away_team}")
-            
-            # 1. COLETAR ESTATÍSTICAS
-            home_stats = self.get_team_stats(teams.get('home', {}).get('id'))
-            away_stats = self.get_team_stats(teams.get('away', {}).get('id'))
-            h2h_stats = self.get_h2h_stats(
-                teams.get('home', {}).get('id'),
-                teams.get('away', {}).get('id')
-            )
-            
-            if not home_stats or not away_stats:
-                logger.warning("Estatísticas incompletas, pulando análise")
-                return
-            
-            # 2. COLETAR INFORMAÇÕES CONTEXTUAIS
-            match_info = {
-                'home_team': home_team,
-                'away_team': away_team,
-                'league': config.LEAGUES.get(league.get('id'), 'N/A'),
-                'games_played': home_stats.get('games_played', 15),
-                'home_position': home_stats.get('position', 10),
-                'away_position': away_stats.get('position', 10),
-                'is_derby': False  # Poderia implementar detecção de derbys
-            }
-            
-            # 3. CALCULAR PROBABILIDADES
-            probabilities = self.prob_calculator.calculate_probabilities_at_ht(
-                home_stats,
-                away_stats,
-                h2h_stats,
-                match_info
-            )
-            
-            logger.info(f"Probabilidades calculadas:")
-            logger.info(f"  Over 0.5: {probabilities['over_0_5']:.1%}")
-            logger.info(f"  Over 1.5: {probabilities['over_1_5']:.1%}")
-            logger.info(f"  Confiança: {probabilities['confidence']:.1%}")
-            
-            # 4. BUSCAR ODDS
-            odds_data = self.get_live_odds(match_id)
-            
-            if not odds_data:
-                logger.warning("Odds não disponíveis")
-                return
-            
-            odds_over_0_5 = odds_data.get('over_0_5', 0)
-            odds_over_1_5 = odds_data.get('over_1_5', 0)
-            
-            if not odds_over_0_5 and not odds_over_1_5:
-                logger.warning("Nenhuma odd disponível para análise")
-                return
-            
-            # 5. ANALISAR EV+ PARA OVER 0.5
-            ev_analysis_0_5 = None
-            if odds_over_0_5 > 0:
-                ev_analysis_0_5 = self.ev_detector.analyze_opportunity(
-                    market='Over 0.5',
-                    probability=probabilities['over_0_5'],
-                    odds=odds_over_0_5,
-                    confidence=probabilities['confidence']
-                )
-            
-            # 6. ANALISAR EV+ PARA OVER 1.5
-            ev_analysis_1_5 = None
-            if odds_over_1_5 > 0:
-                ev_analysis_1_5 = self.ev_detector.analyze_opportunity(
-                    market='Over 1.5',
-                    probability=probabilities['over_1_5'],
-                    odds=odds_over_1_5,
-                    confidence=probabilities['confidence']
-                )
-            
-            # 7. COMPARAR E DECIDIR MELHOR OPORTUNIDADE
-            comparison = self.ev_detector.compare_markets(
-                ev_analysis_0_5, 
-                ev_analysis_1_5,
-                over_0_5_prob=probabilities['over_0_5'],
-                over_1_5_prob=probabilities['over_1_5'],
-                over_0_5_odds=odds_over_0_5 or 0,
-                over_1_5_odds=odds_over_1_5 or 0
-            )
-            
-            # 8. ENVIAR NOTIFICAÇÃO
-            if comparison.get('has_opportunity'):
-                # 🔥 EV+ DETECTADO - APOSTAR!
-                message = self.ev_detector.format_opportunity_message(comparison, match_info)
-                self.send_telegram_message(message)
-                
-                logger.info(f"✅ EV+ DETECTADO: {home_team} vs {away_team}")
-                logger.info(f"   Mercado: {comparison['best_market']}")
-                logger.info(f"   EV: +{comparison['analysis']['ev_percentage']:.2f}%")
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('response'):
+                    return data['response']
             else:
-                # ⛔ EV- DETECTADO - NÃO APOSTAR (mas notificar para educação)
-                logger.info(f"❌ Sem EV+: {home_team} vs {away_team}")
-                
-                # Verificar se deve notificar EV negativo
-                if config.NOTIFICATION_SETTINGS.get('send_ev_negative', False):
-                    message = self.ev_detector.format_ev_negative_message(comparison, match_info)
-                    self.send_telegram_message(message)
-                    logger.info(f"📚 Notificação educativa EV- enviada")
-            
-            # Marcar como notificado
-            self.notified_matches.add(ht_key)
+                logger.warning(f"⚠️ Erro ao buscar estatísticas do jogo {fixture_id}: {response.status_code}")
             
         except Exception as e:
-            logger.error(f"Erro ao analisar HT 0-0: {e}", exc_info=True)
+            logger.error(f"❌ Exceção ao buscar estatísticas do jogo {fixture_id}: {e}")
+        
+        return None
     
-    def get_team_stats(self, team_id: int) -> Optional[Dict]:
+    def get_team_statistics(self, team_id: int, league_id: int) -> Optional[Dict]:
         """
-        Busca estatísticas do time na temporada atual.
-        Retorna dados necessários para cálculo de probabilidades.
+        Busca estatísticas de um time na temporada
+        
+        Args:
+            team_id: ID do time
+            league_id: ID da liga
+        
+        Returns:
+            Dicionário com estatísticas ou None
         """
         try:
             url = f"{self.base_url}/teams/statistics"
             params = {
                 'team': team_id,
-                'season': self._get_current_season(),
-                'league': list(config.LEAGUES.keys())[0]  # Usar primeira liga como referência
+                'league': league_id,
+                'season': Config.SEASON
             }
             
-            response = self._make_api_request(url, params)
+            response = requests.get(url, headers=self.headers, params=params, timeout=10)
             
-            if not response or response.get('results', 0) == 0:
-                return None
-            
-            data = response.get('response', {})
-            fixtures = data.get('fixtures', {})
-            goals = data.get('goals', {})
-            
-            # Calcular estatísticas necessárias
-            total_games = fixtures.get('played', {}).get('total', 0)
-            
-            if total_games < config.MIN_GAMES_PLAYED:
-                return None
-            
-            # Taxa de Over 0.5 e Over 1.5 (aproximação baseada em gols)
-            total_goals = goals.get('for', {}).get('total', {}).get('total', 0)
-            avg_goals = total_goals / total_games if total_games > 0 else 1.5
-            
-            # Estimativa Over 0.5: ~85% dos jogos têm pelo menos 1 gol
-            over_0_5_rate = 0.85
-            
-            # Estimativa Over 1.5 baseada em média de gols
-            if avg_goals >= 2.5:
-                over_1_5_rate = 0.75
-            elif avg_goals >= 2.0:
-                over_1_5_rate = 0.65
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('response'):
+                    return data['response']
             else:
-                over_1_5_rate = 0.55
-            
-            # Taxa de empate 0x0
-            draws = fixtures.get('draws', {}).get('total', 0)
-            # Estimar que ~40% dos empates são 0x0
-            draw_0x0_rate = (draws * 0.4) / total_games if total_games > 0 else 0.15
-            
-            return {
-                'team_id': team_id,
-                'games_played': total_games,
-                'goals_per_game': avg_goals,
-                'over_0_5_rate': over_0_5_rate,
-                'over_1_5_rate': over_1_5_rate,
-                'recent_over_0_5_rate': 0.80,  # Valor padrão
-                'recent_over_1_5_rate': 0.65,
-                'draw_0x0_rate': draw_0x0_rate,
-                'offensive_rating': 60,  # Valor padrão
-                'goals_last_5': int(avg_goals * 5),
-                'position': 10  # Valor padrão
-            }
+                logger.warning(f"⚠️ Erro ao buscar estatísticas do time {team_id}: {response.status_code}")
             
         except Exception as e:
-            logger.error(f"Erro ao buscar stats do time {team_id}: {e}")
-            return None
+            logger.error(f"❌ Exceção ao buscar estatísticas do time {team_id}: {e}")
+        
+        return None
     
-    def get_h2h_stats(self, home_id: int, away_id: int) -> Dict:
-        """Busca estatísticas de confrontos diretos (H2H)"""
+    def get_h2h(self, team1_id: int, team2_id: int, last_n: int = 10) -> List[Dict]:
+        """
+        Busca histórico de confrontos diretos
+        
+        Args:
+            team1_id: ID do primeiro time
+            team2_id: ID do segundo time
+            last_n: Número de jogos a buscar
+        
+        Returns:
+            Lista de confrontos
+        """
         try:
             url = f"{self.base_url}/fixtures/headtohead"
             params = {
-                'h2h': f"{home_id}-{away_id}",
-                'last': 5
+                'h2h': f"{team1_id}-{team2_id}",
+                'last': last_n
             }
             
-            response = self._make_api_request(url, params)
+            response = requests.get(url, headers=self.headers, params=params, timeout=10)
             
-            if not response or response.get('results', 0) == 0:
-                return {'total_games': 0, 'over_0_5_rate': 0.75, 'over_1_5_rate': 0.60}
-            
-            fixtures = response.get('response', [])
-            total_games = len(fixtures)
-            
-            # Calcular taxa Over 0.5 e Over 1.5 nos H2H
-            over_0_5_count = 0
-            over_1_5_count = 0
-            
-            for fixture in fixtures:
-                goals = fixture.get('goals', {})
-                total = (goals.get('home', 0) + goals.get('away', 0))
-                
-                if total >= 1:
-                    over_0_5_count += 1
-                if total >= 2:
-                    over_1_5_count += 1
-            
-            over_0_5_rate = over_0_5_count / total_games if total_games > 0 else 0.75
-            over_1_5_rate = over_1_5_count / total_games if total_games > 0 else 0.60
-            
-            return {
-                'total_games': total_games,
-                'over_0_5_rate': over_0_5_rate,
-                'over_1_5_rate': over_1_5_rate
-            }
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('response'):
+                    return data['response']
+            else:
+                logger.warning(f"⚠️ Erro ao buscar H2H {team1_id}-{team2_id}: {response.status_code}")
             
         except Exception as e:
-            logger.error(f"Erro ao buscar H2H: {e}")
-            return {'total_games': 0, 'over_0_5_rate': 0.75, 'over_1_5_rate': 0.60}
-    
-    def get_live_odds(self, fixture_id: int) -> Optional[Dict]:
-        """
-        Busca odds ao vivo para Over 0.5 e Over 1.5
+            logger.error(f"❌ Exceção ao buscar H2H {team1_id}-{team2_id}: {e}")
         
-        NOTA: API-Football requer plano específico para odds ao vivo.
-        Esta função é um placeholder - adaptar conforme disponibilidade da API.
+        return []
+    
+    def get_odds(self, fixture_id: int) -> Optional[Dict]:
+        """
+        Busca odds de um jogo específico
+        
+        Args:
+            fixture_id: ID do jogo
+        
+        Returns:
+            Dicionário com odds ou None
         """
         try:
-            url = f"{self.base_url}/odds/live"
+            url = f"{self.base_url}/odds"
             params = {
                 'fixture': fixture_id,
-                'bet': 5  # Goals Over/Under
+                'bookmaker': Config.BOOKMAKER_ID
             }
             
-            response = self._make_api_request(url, params)
-            
-            if not response or response.get('results', 0) == 0:
-                # Se odds ao vivo não disponíveis, retornar odds estimadas
-                logger.warning("Odds ao vivo não disponíveis, usando estimativas")
-                return {
-                    'over_0_5': 1.20,  # Odd típica Over 0.5
-                    'over_1_5': 1.50   # Odd típica Over 1.5
-                }
-            
-            # Processar odds da API
-            # NOTA: Formato exato depende da resposta da API
-            # Este é um exemplo genérico
-            
-            return {
-                'over_0_5': 1.20,
-                'over_1_5': 1.50
-            }
-            
-        except Exception as e:
-            logger.error(f"Erro ao buscar odds: {e}")
-            return None
-    
-    def send_telegram_message(self, message: str):
-        """Envia mensagem para Telegram"""
-        try:
-            url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
-            data = {
-                'chat_id': self.telegram_chat_id,
-                'text': message,
-                'parse_mode': 'Markdown'
-            }
-            
-            response = requests.post(url, data=data, timeout=10)
+            response = requests.get(url, headers=self.headers, params=params, timeout=10)
             
             if response.status_code == 200:
-                logger.info("✅ Mensagem Telegram enviada")
+                data = response.json()
+                if data.get('response'):
+                    return data['response'][0] if data['response'] else None
             else:
-                logger.error(f"❌ Erro ao enviar Telegram: {response.text}")
-                
+                logger.warning(f"⚠️ Erro ao buscar odds do jogo {fixture_id}: {response.status_code}")
+            
         except Exception as e:
-            logger.error(f"Erro ao enviar Telegram: {e}")
+            logger.error(f"❌ Exceção ao buscar odds do jogo {fixture_id}: {e}")
+        
+        return None
     
-    def _make_api_request(self, url: str, params: Dict) -> Optional[Dict]:
-        """Faz requisição para API-Football"""
+    def extract_over_odds(self, odds_data: Dict) -> Tuple[Optional[float], Optional[float]]:
+        """
+        Extrai odds de Over 0.5 e Over 1.5 dos dados da API
+        
+        Args:
+            odds_data: Dados de odds da API
+        
+        Returns:
+            Tuple (over_05_odds, over_15_odds)
+        """
+        over_05 = None
+        over_15 = None
+        
+        if not odds_data or 'bookmakers' not in odds_data:
+            return over_05, over_15
+        
         try:
-            headers = {
-                'x-rapidapi-key': self.api_key,
-                'x-rapidapi-host': 'v3.football.api-sports.io'
+            bookmakers = odds_data['bookmakers']
+            
+            for bookmaker in bookmakers:
+                if 'bets' not in bookmaker:
+                    continue
+                
+                for bet in bookmaker['bets']:
+                    if bet['name'] == 'Goals Over/Under':
+                        for value in bet['values']:
+                            if value['value'] == 'Over 0.5':
+                                over_05 = float(value['odd'])
+                            elif value['value'] == 'Over 1.5':
+                                over_15 = float(value['odd'])
+        
+        except Exception as e:
+            logger.error(f"❌ Erro ao extrair odds: {e}")
+        
+        return over_05, over_15
+    
+    def check_0x0_draw_rate(self, team1_stats: Dict, team2_stats: Dict) -> bool:
+        """
+        Verifica se ambos os times têm taxa de empate 0-0 <= 15%
+        
+        Args:
+            team1_stats: Estatísticas do time 1
+            team2_stats: Estatísticas do time 2
+        
+        Returns:
+            True se ambos atendem o critério
+        """
+        try:
+            # Time 1
+            fixtures1 = team1_stats.get('fixtures', {})
+            draws1 = fixtures1.get('draws', {}).get('total', 0)
+            total1 = fixtures1.get('played', {}).get('total', 0)
+            
+            if total1 == 0:
+                return False
+            
+            draw_rate1 = (draws1 / total1) * 100
+            
+            # Time 2
+            fixtures2 = team2_stats.get('fixtures', {})
+            draws2 = fixtures2.get('draws', {}).get('total', 0)
+            total2 = fixtures2.get('played', {}).get('total', 0)
+            
+            if total2 == 0:
+                return False
+            
+            draw_rate2 = (draws2 / total2) * 100
+            
+            logger.info(f"📊 Taxa empate 0-0: Time1={draw_rate1:.1f}%, Time2={draw_rate2:.1f}%")
+            
+            return draw_rate1 <= Config.MAX_DRAW_RATE and draw_rate2 <= Config.MAX_DRAW_RATE
+        
+        except Exception as e:
+            logger.error(f"❌ Erro ao verificar taxa de empate: {e}")
+            return False
+    
+    def is_halftime_0x0(self, fixture: Dict) -> bool:
+        """
+        Verifica se o jogo está 0-0 no intervalo
+        
+        Args:
+            fixture: Dados do jogo
+        
+        Returns:
+            True se está 0-0 no HT
+        """
+        try:
+            status = fixture.get('fixture', {}).get('status', {})
+            short_status = status.get('short', '')
+            
+            # Verificar se está no intervalo
+            if short_status != 'HT':
+                return False
+            
+            # Verificar placar
+            score = fixture.get('score', {})
+            halftime = score.get('halftime', {})
+            home = halftime.get('home')
+            away = halftime.get('away')
+            
+            return home == 0 and away == 0
+        
+        except Exception as e:
+            logger.error(f"❌ Erro ao verificar HT 0-0: {e}")
+            return False
+    
+    def process_fixture(self, fixture: Dict):
+        """
+        Processa um jogo e detecta oportunidades EV+
+        
+        Args:
+            fixture: Dados do jogo
+        """
+        try:
+            fixture_id = fixture['fixture']['id']
+            
+            # Evitar processar múltiplas vezes
+            if fixture_id in self.notified_fixtures:
+                return
+            
+            home_team = fixture['teams']['home']
+            away_team = fixture['teams']['away']
+            league = fixture['league']
+            
+            logger.info(f"🔍 Processando: {home_team['name']} vs {away_team['name']}")
+            
+            # Buscar estatísticas dos times
+            home_stats = self.get_team_statistics(home_team['id'], league['id'])
+            away_stats = self.get_team_statistics(away_team['id'], league['id'])
+            
+            if not home_stats or not away_stats:
+                logger.warning("⚠️ Não foi possível obter estatísticas dos times")
+                return
+            
+            # Verificar taxa de empate 0-0
+            if not self.check_0x0_draw_rate(home_stats, away_stats):
+                logger.info("❌ Times não atendem critério de taxa de empate 0-0")
+                return
+            
+            # Buscar H2H
+            h2h_matches = self.get_h2h(home_team['id'], away_team['id'])
+            
+            # Calcular probabilidades
+            match_data = {
+                'home_stats': home_stats,
+                'away_stats': away_stats,
+                'h2h': h2h_matches,
+                'is_ht_0x0': True  # Sabemos que está 0-0 no HT
             }
             
-            response = requests.get(
-                url,
-                headers=headers,
-                params=params,
-                timeout=config.API_TIMEOUT
+            prob_over_05, prob_over_15 = self.probability_calculator.calculate_probabilities(match_data)
+            
+            logger.info(f"📊 Probabilidades: Over 0.5 = {prob_over_05:.1f}%, Over 1.5 = {prob_over_15:.1f}%")
+            
+            # Buscar odds
+            odds_data = self.get_odds(fixture_id)
+            
+            if not odds_data:
+                logger.warning("⚠️ Não foi possível obter odds")
+                return
+            
+            over_05_odds, over_15_odds = self.extract_over_odds(odds_data)
+            
+            if not over_05_odds or not over_15_odds:
+                logger.warning("⚠️ Odds Over 0.5/1.5 não disponíveis")
+                return
+            
+            logger.info(f"💰 Odds: Over 0.5 = {over_05_odds}, Over 1.5 = {over_15_odds}")
+            
+            # Detectar EV+
+            opportunities = self.ev_detector.detect_ev_opportunities(
+                prob_over_05=prob_over_05,
+                prob_over_15=prob_over_15,
+                over_05_odds=over_05_odds,
+                over_15_odds=over_15_odds
             )
             
-            if response.status_code == 200:
-                return response.json()
-            else:
-                logger.error(f"API error: {response.status_code} - {response.text}")
-                return None
+            # Processar oportunidades EV+
+            for opp in opportunities:
+                if opp['is_ev_positive']:
+                    message = self.ev_detector.format_ev_message(
+                        fixture=fixture,
+                        opportunity=opp
+                    )
+                    
+                    if send_telegram_notification(message):
+                        logger.info("✅ Notificação EV+ enviada!")
+                        self.notified_fixtures.add(fixture_id)
+                    else:
+                        logger.error("❌ Falha ao enviar notificação EV+")
                 
-        except Exception as e:
-            logger.error(f"Erro na requisição API: {e}")
-            return None
-    
-    def _get_current_season(self) -> int:
-        """Retorna temporada atual baseada no mês"""
-        now = datetime.utcnow()
+                # Enviar notificação EV- se configurado
+                elif Config.SEND_EV_NEGATIVE:
+                    message = self.ev_detector.format_ev_negative_message(
+                        fixture=fixture,
+                        opportunity=opp
+                    )
+                    
+                    send_telegram_notification(message)
+                    logger.info("📚 Notificação EV- (educativa) enviada")
         
-        # Se jan-jun: temporada = ano anterior
-        # Se jul-dez: temporada = ano atual
-        if now.month <= 6:
-            return now.year - 1
-        else:
-            return now.year
+        except Exception as e:
+            logger.error(f"❌ Erro ao processar fixture: {e}")
+    
+    def run(self):
+        """Executa o loop principal do bot"""
+        logger.info("🚀 Santo Graal Bot EV+ iniciado!")
+        
+        while True:
+            try:
+                # Verificar jogos próximos (próximas 24h)
+                logger.info("⏰ Verificando jogos nas próximas 24h...")
+                upcoming = self.get_upcoming_fixtures(hours_ahead=24)
+                logger.info(f"Encontrados {len(upcoming)} jogos próximos")
+                
+                # Verificar jogos ao vivo 0-0 no HT
+                logger.info("🔴 Verificando jogos ao vivo...")
+                live = self.get_live_fixtures()
+                
+                # Filtrar apenas jogos 0-0 no HT
+                ht_0x0_fixtures = [f for f in live if self.is_halftime_0x0(f)]
+                
+                logger.info(f"Encontrados {len(ht_0x0_fixtures)} jogos ao vivo 0-0")
+                
+                # Processar jogos 0-0 no HT
+                for fixture in ht_0x0_fixtures:
+                    self.process_fixture(fixture)
+                    time.sleep(1)  # Rate limiting
+                
+                # Aguardar antes do próximo ciclo
+                logger.info(f"💤 Aguardando {Config.CHECK_INTERVAL} segundos até próxima verificação...")
+                time.sleep(Config.CHECK_INTERVAL)
+            
+            except KeyboardInterrupt:
+                logger.info("⚠️ Bot interrompido pelo usuário")
+                break
+            
+            except Exception as e:
+                logger.error(f"❌ Erro no loop principal: {e}")
+                time.sleep(60)  # Aguardar 1 minuto em caso de erro
 
+
+# ============================================================
+# Função Principal
+# ============================================================
 
 def main():
     """Função principal"""
+    
+    # Iniciar servidor HTTP em thread separada (para Render Web Service)
+    health_thread = Thread(target=run_health_check_server, daemon=True)
+    health_thread.start()
+    logger.info(f"✅ Health check endpoint ativo na porta {os.getenv('PORT', 10000)}")
+    
+    bot = SantoGraalBot()
+    
     try:
-        bot = SantoGraalBotEV()
-        bot.run()
-    except KeyboardInterrupt:
-        logger.info("\n🛑 Bot interrompido pelo usuário")
+        # Enviar mensagem de inicialização
+        startup_message = (
+            "🤖 *Santo Graal Bot EV\\+ Iniciado\\!*\n\n"
+            f"📊 *Ligas monitoradas:* {len(Config.LEAGUES)}\n"
+            f"⚡ *EV mínimo:* \\+{Config.MIN_EV_PERCENT}%\n"
+            f"💰 *Stake máximo:* {Config.MAX_STAKE_PERCENT}% da banca\n"
+            f"🎯 *Kelly Criterion:* {Config.KELLY_FRACTION*100}% conservador\n\n"
+            "✅ Sistema pronto\\! Monitorando jogos 24/7\\.\\.\\."
+        )
+        send_telegram_notification(startup_message)
     except Exception as e:
-        logger.error(f"Erro fatal: {e}", exc_info=True)
+        logger.error(f"❌ Erro ao enviar Telegram: {e}")
+    
+    # Iniciar bot
+    bot.run()
 
 
 if __name__ == "__main__":
