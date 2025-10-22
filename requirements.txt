@@ -1,5 +1,10 @@
-flask==3.0.0
+# Santo Graal Bot EV+ - Dependências Python
+
+# Requisições HTTP
 requests==2.31.0
-python-dateutil==2.9.0.post0
-pytz==2024.1
-gunicorn==21.2.0
+
+# Variáveis de ambiente
+python-dotenv==1.0.0
+
+# Logging avançado (opcional)
+colorlog==6.8.0
