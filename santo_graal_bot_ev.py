@@ -238,7 +238,6 @@ class SantoGraalBot:
                 url = f"{self.base_url}/fixtures"
                 params = {
                     'league': league_id,
-                    'season': Config.SEASON,
                     'live': 'all'
                 }
                 
