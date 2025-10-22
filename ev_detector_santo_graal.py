@@ -1,318 +1,289 @@
 """
-Detector de Expected Value (EV+) para Santo Graal
-Identifica quando odds oferecidas têm valor positivo
+Detector de Expected Value (EV) para Santo Graal Bot
+Calcula EV, Kelly Criterion e formata notificações
 """
 
-from typing import Dict, Optional
-import config_santo_graal as config
+from typing import Dict, List, Optional
+from config_santo_graal import Config
 
 
-class EVDetectorSantoGraal:
+class EVDetector:
     """
-    Detecta oportunidades com Expected Value positivo (EV+).
-    Calcula EV, Kelly Criterion e recomenda stake.
+    Detecta oportunidades de Expected Value positivo (EV+)
+    
+    Fórmula EV: (Probabilidade × Odds) - 1
+    
+    EV+ (≥ +5%): Apostar (value bet)
+    EV- (< 0%): NÃO apostar (odds ruins)
+    EV neutro (0-5%): Marginal
     """
     
     def __init__(self):
-        self.min_ev = config.MIN_EV_PERCENTAGE
-        self.kelly_fraction = config.KELLY_FRACTION
-        self.max_stake = config.MAX_STAKE_PERCENTAGE
+        """Inicializa o detector"""
+        self.min_ev = Config.MIN_EV_PERCENT / 100  # Converter para decimal
+        self.kelly_fraction = Config.KELLY_FRACTION
+        self.max_stake = Config.MAX_STAKE_PERCENT / 100
+        self.bankroll = Config.DEFAULT_BANKROLL
     
-    def analyze_opportunity(
-        self, 
-        market: str,
-        probability: float,
-        odds: float,
-        confidence: float
-    ) -> Optional[Dict]:
+    def calculate_ev(self, probability: float, odds: float) -> float:
         """
-        Analisa se uma odd oferece valor positivo (EV+).
+        Calcula Expected Value
         
         Args:
-            market: 'Over 0.5' ou 'Over 1.5'
-            probability: Probabilidade calculada (0-1)
-            odds: Odd oferecida pela casa
-            confidence: Confiança no cálculo (0-1)
+            probability: Probabilidade em % (0-100)
+            odds: Odds decimal (ex: 1.50)
         
         Returns:
-            Dict com análise EV ou None se não for EV+
+            EV em decimal (ex: 0.05 = +5%)
         """
-        
-        # Validar odds dentro do range aceitável
-        if odds < config.MIN_ODDS_RANGE or odds > config.MAX_ODDS_RANGE:
-            return None
-        
-        # Validar probabilidade mínima
-        if market == 'Over 0.5' and probability < config.MIN_PROBABILITY_OVER_0_5:
-            return None
-        if market == 'Over 1.5' and probability < config.MIN_PROBABILITY_OVER_1_5:
-            return None
-        
-        # CALCULAR EXPECTED VALUE (EV)
-        # EV = (Probabilidade × Odds) - 1
-        ev = (probability * odds) - 1
-        ev_percentage = ev * 100
-        
-        # Verificar se EV é positivo e atende critério mínimo
-        if ev_percentage < self.min_ev:
-            return None
-        
-        # CALCULAR KELLY STAKE
-        # Kelly = (bp - q) / b
-        # b = odds - 1, p = probabilidade, q = 1 - p
-        kelly_stake = self._calculate_kelly(probability, odds)
-        
-        # Aplicar fração conservadora (25% do Kelly)
-        conservative_stake = kelly_stake * self.kelly_fraction
-        
-        # Limitar ao máximo permitido
-        recommended_stake = min(conservative_stake, self.max_stake)
-        
-        # AJUSTAR STAKE PELA CONFIANÇA
-        # Confiança baixa = reduzir stake
-        adjusted_stake = recommended_stake * confidence
-        
-        return {
-            'market': market,
-            'probability': round(probability, 4),
-            'odds': odds,
-            'ev': round(ev, 4),
-            'ev_percentage': round(ev_percentage, 2),
-            'confidence': round(confidence, 4),
-            'kelly_full': round(kelly_stake, 2),
-            'kelly_conservative': round(conservative_stake, 2),
-            'recommended_stake': round(adjusted_stake, 2),
-            'is_value_bet': True
-        }
+        prob_decimal = probability / 100
+        ev = (prob_decimal * odds) - 1
+        return ev
     
-    def _calculate_kelly(self, probability: float, odds: float) -> float:
+    def calculate_kelly_stake(
+        self, 
+        probability: float, 
+        odds: float, 
+        bankroll: Optional[float] = None
+    ) -> float:
         """
-        Calcula Kelly Criterion para gestão de banca.
+        Calcula stake recomendado usando Kelly Criterion
         
-        Kelly = (bp - q) / b
-        onde:
-        - b = odds decimais - 1
+        Fórmula: Kelly = (bp - q) / b
+        Onde:
+        - b = odds - 1
         - p = probabilidade de ganhar
         - q = probabilidade de perder (1 - p)
+        
+        Args:
+            probability: Probabilidade em % (0-100)
+            odds: Odds decimal
+            bankroll: Banca disponível (default: Config.DEFAULT_BANKROLL)
+        
+        Returns:
+            Stake recomendado em valor absoluto
         """
+        if bankroll is None:
+            bankroll = self.bankroll
+        
+        prob_decimal = probability / 100
         b = odds - 1
-        p = probability
+        p = prob_decimal
         q = 1 - p
         
-        kelly = ((b * p) - q) / b
+        # Kelly completo
+        kelly_full = (b * p - q) / b
         
-        # Kelly nunca pode ser negativo (já filtramos EV+ antes)
-        # Mas por segurança, limitar entre 0 e 100%
-        kelly_percentage = max(0, min(kelly * 100, 100))
+        # Aplicar fração conservadora (25%)
+        kelly_conservative = kelly_full * self.kelly_fraction
         
-        return kelly_percentage
+        # Garantir que não ultrapassa máximo permitido
+        kelly_conservative = max(0, min(kelly_conservative, self.max_stake))
+        
+        # Calcular stake em valor absoluto
+        stake = bankroll * kelly_conservative
+        
+        return stake
     
-    def compare_markets(
+    def detect_ev_opportunities(
         self,
-        over_0_5_analysis: Optional[Dict],
-        over_1_5_analysis: Optional[Dict],
-        over_0_5_prob: float = 0.0,
-        over_1_5_prob: float = 0.0,
-        over_0_5_odds: float = 0.0,
-        over_1_5_odds: float = 0.0
-    ) -> Dict:
+        prob_over_05: float,
+        prob_over_15: float,
+        over_05_odds: float,
+        over_15_odds: float
+    ) -> List[Dict]:
         """
-        Compara análises de Over 0.5 e Over 1.5 e retorna melhor oportunidade.
-        Agora também retorna informações sobre EV- para fins educativos.
-        
-        Returns:
-            Dict com melhor oportunidade ou informação que nenhuma é EV+
-        """
-        if not over_0_5_analysis and not over_1_5_analysis:
-            # Calcular EV negativo para informação educativa
-            ev_negative_info = []
-            
-            if over_0_5_odds > 0:
-                ev_0_5 = (over_0_5_prob * over_0_5_odds) - 1
-                ev_negative_info.append({
-                    'market': 'Over 0.5',
-                    'probability': over_0_5_prob,
-                    'odds': over_0_5_odds,
-                    'ev': ev_0_5,
-                    'ev_percentage': ev_0_5 * 100
-                })
-            
-            if over_1_5_odds > 0:
-                ev_1_5 = (over_1_5_prob * over_1_5_odds) - 1
-                ev_negative_info.append({
-                    'market': 'Over 1.5',
-                    'probability': over_1_5_prob,
-                    'odds': over_1_5_odds,
-                    'ev': ev_1_5,
-                    'ev_percentage': ev_1_5 * 100
-                })
-            
-            return {
-                'has_opportunity': False,
-                'message': 'Nenhum mercado apresenta EV+ no momento',
-                'ev_negative_markets': ev_negative_info
-            }
-        
-        # Se apenas um mercado é EV+
-        if over_0_5_analysis and not over_1_5_analysis:
-            return {
-                'has_opportunity': True,
-                'best_market': 'Over 0.5',
-                'analysis': over_0_5_analysis,
-                'alternative': None
-            }
-        
-        if over_1_5_analysis and not over_0_5_analysis:
-            return {
-                'has_opportunity': True,
-                'best_market': 'Over 1.5',
-                'analysis': over_1_5_analysis,
-                'alternative': None
-            }
-        
-        # Ambos são EV+ - comparar qual é melhor
-        # Critério: EV ajustado pela confiança
-        ev_adjusted_0_5 = over_0_5_analysis['ev_percentage'] * over_0_5_analysis['confidence']
-        ev_adjusted_1_5 = over_1_5_analysis['ev_percentage'] * over_1_5_analysis['confidence']
-        
-        if ev_adjusted_0_5 >= ev_adjusted_1_5:
-            return {
-                'has_opportunity': True,
-                'best_market': 'Over 0.5',
-                'analysis': over_0_5_analysis,
-                'alternative': {
-                    'market': 'Over 1.5',
-                    'analysis': over_1_5_analysis
-                }
-            }
-        else:
-            return {
-                'has_opportunity': True,
-                'best_market': 'Over 1.5',
-                'analysis': over_1_5_analysis,
-                'alternative': {
-                    'market': 'Over 0.5',
-                    'analysis': over_0_5_analysis
-                }
-            }
-    
-    def format_ev_negative_message(self, comparison: Dict, match_info: Dict) -> str:
-        """
-        Formata mensagem EDUCATIVA quando jogo é HT 0-0 mas odds são EV-.
+        Detecta oportunidades EV+ em Over 0.5 e Over 1.5
         
         Args:
-            comparison: Resultado de compare_markets() com EV-
-            match_info: Informações do jogo
+            prob_over_05: Probabilidade Over 0.5 (%)
+            prob_over_15: Probabilidade Over 1.5 (%)
+            over_05_odds: Odds Over 0.5
+            over_15_odds: Odds Over 1.5
         
         Returns:
-            String formatada para Telegram (mensagem educativa)
+            Lista de oportunidades com detalhes
         """
-        # Emojis
-        emoji_stop = '⛔'
-        emoji_chart = '📉'
-        emoji_info = 'ℹ️'
-        emoji_learn = '🎓'
+        opportunities = []
         
-        message = f"{emoji_stop} **ATENÇÃO: HT 0-0 DETECTADO - ODDS SEM VALOR!**\n\n"
-        message += f"**Jogo:** {match_info['home_team']} vs {match_info['away_team']}\n"
-        message += f"**Liga:** {match_info['league']}\n"
-        message += f"**Placar HT:** 0-0\n\n"
+        # Validar odds no range permitido
+        if not (Config.MIN_ODDS_RANGE <= over_05_odds <= Config.MAX_ODDS_RANGE):
+            over_05_odds = None
         
-        message += f"{emoji_chart} **ANÁLISE MATEMÁTICA**\n\n"
+        if not (Config.MIN_ODDS_RANGE <= over_15_odds <= Config.MAX_ODDS_RANGE):
+            over_15_odds = None
         
-        # Mostrar cada mercado com EV-
-        ev_markets = comparison.get('ev_negative_markets', [])
-        
-        for market_info in ev_markets:
-            market = market_info['market']
-            prob = market_info['probability']
-            odds = market_info['odds']
-            ev_pct = market_info['ev_percentage']
+        # Analisar Over 0.5
+        if over_05_odds and prob_over_05 >= Config.MIN_PROBABILITY_OVER_05:
+            ev_05 = self.calculate_ev(prob_over_05, over_05_odds)
+            stake_05 = self.calculate_kelly_stake(prob_over_05, over_05_odds)
             
-            message += f"**{market}:**\n"
-            message += f"• Odd oferecida: {odds}\n"
-            message += f"• Probabilidade calculada: {prob*100:.1f}%\n"
-            message += f"• **EV: {ev_pct:+.2f}%** ❌ (NEGATIVO)\n\n"
+            opportunities.append({
+                'market': 'Over 0.5',
+                'probability': prob_over_05,
+                'odds': over_05_odds,
+                'ev': ev_05,
+                'ev_percent': ev_05 * 100,
+                'is_ev_positive': ev_05 >= self.min_ev,
+                'kelly_stake': stake_05,
+                'stake_percent': (stake_05 / self.bankroll) * 100
+            })
         
-        message += f"{emoji_info} **POR QUE NÃO APOSTAR?**\n\n"
-        
-        # Explicação educativa
-        worst_market = min(ev_markets, key=lambda x: x['ev_percentage']) if ev_markets else None
-        
-        if worst_market:
-            prob = worst_market['probability']
-            odds = worst_market['odds']
-            ev_pct = worst_market['ev_percentage']
+        # Analisar Over 1.5
+        if over_15_odds and prob_over_15 >= Config.MIN_PROBABILITY_OVER_15:
+            ev_15 = self.calculate_ev(prob_over_15, over_15_odds)
+            stake_15 = self.calculate_kelly_stake(prob_over_15, over_15_odds)
             
-            message += f"Expected Value (EV) mede se uma aposta é lucrativa:\n"
-            message += f"EV = (Probabilidade × Odds) - 1\n\n"
-            message += f"Neste caso:\n"
-            message += f"EV = ({prob:.2f} × {odds}) - 1 = {ev_pct/100:.4f}\n\n"
-            message += f"**EV negativo = Prejuízo esperado a longo prazo**\n\n"
-            
-            # Simulação de 100 apostas
-            loss_per_bet = abs(ev_pct)
-            total_loss = loss_per_bet  # Perda esperada por aposta
-            
-            message += f"📊 **SIMULAÇÃO (100 apostas):**\n"
-            message += f"Perda esperada por aposta: {loss_per_bet:.2f}%\n"
-            message += f"Perda total esperada: {total_loss:.1f} unidades\n\n"
+            opportunities.append({
+                'market': 'Over 1.5',
+                'probability': prob_over_15,
+                'odds': over_15_odds,
+                'ev': ev_15,
+                'ev_percent': ev_15 * 100,
+                'is_ev_positive': ev_15 >= self.min_ev,
+                'kelly_stake': stake_15,
+                'stake_percent': (stake_15 / self.bankroll) * 100
+            })
         
-        message += f"{emoji_learn} **APRENDIZADO:**\n"
-        message += f"O sistema calculou que as odds oferecidas\n"
-        message += f"estão ABAIXO do valor justo baseado nas\n"
-        message += f"probabilidades reais do jogo.\n\n"
-        message += f"❌ **RECOMENDAÇÃO: NÃO APOSTAR**\n\n"
-        message += f"_O bot só recomenda apostas com EV ≥ +5%_\n"
-        message += f"_Isso garante lucro sustentável a longo prazo_"
+        return opportunities
+    
+    def format_ev_message(self, fixture: Dict, opportunity: Dict) -> str:
+        """
+        Formata mensagem Telegram para oportunidade EV+
+        
+        Args:
+            fixture: Dados do jogo da API
+            opportunity: Dados da oportunidade detectada
+        
+        Returns:
+            Mensagem formatada em MarkdownV2
+        """
+        home_team = fixture['teams']['home']['name']
+        away_team = fixture['teams']['away']['name']
+        league = fixture['league']['name']
+        
+        market = opportunity['market']
+        probability = opportunity['probability']
+        odds = opportunity['odds']
+        ev_percent = opportunity['ev_percent']
+        stake = opportunity['kelly_stake']
+        stake_percent = opportunity['stake_percent']
+        
+        # Escapar caracteres especiais para MarkdownV2
+        def escape_md(text):
+            special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+            for char in special_chars:
+                text = text.replace(char, f'\\{char}')
+            return text
+        
+        home_escaped = escape_md(home_team)
+        away_escaped = escape_md(away_team)
+        league_escaped = escape_md(league)
+        
+        message = (
+            f"🚨 *OPORTUNIDADE EV\\+* 🚨\n\n"
+            f"⚽ *Jogo:* {home_escaped} vs {away_escaped}\n"
+            f"🏆 *Liga:* {league_escaped}\n"
+            f"📊 *Situação:* HT 0\\-0\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 *Mercado:* {escape_md(market)}\n"
+            f"📈 *Probabilidade:* {probability:.1f}%\n"
+            f"💵 *Odds:* {odds:.2f}\n"
+            f"⚡ *Expected Value:* \\+{ev_percent:.1f}%\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🎯 *RECOMENDAÇÃO KELLY:*\n"
+            f"💸 *Stake:* ${stake:.2f} \\({stake_percent:.1f}% da banca\\)\n"
+            f"🏦 *Base:* Banca de ${self.bankroll:.0f}\n\n"
+            f"✅ *APOSTAR* \\- Value bet detectado\\!\n"
+            f"🔥 Odds acima do valor justo\\!"
+        )
         
         return message
     
-    def format_opportunity_message(self, comparison: Dict, match_info: Dict) -> str:
+    def format_ev_negative_message(self, fixture: Dict, opportunity: Dict) -> str:
         """
-        Formata mensagem de oportunidade EV+ para notificação.
+        Formata mensagem educativa para oportunidades EV- (negativas)
         
         Args:
-            comparison: Resultado de compare_markets()
-            match_info: Informações do jogo
+            fixture: Dados do jogo da API
+            opportunity: Dados da oportunidade (EV negativo)
         
         Returns:
-            String formatada para Telegram
+            Mensagem formatada em MarkdownV2
         """
-        if not comparison.get('has_opportunity'):
-            return comparison.get('message', 'Sem oportunidades')
+        home_team = fixture['teams']['home']['name']
+        away_team = fixture['teams']['away']['name']
+        league = fixture['league']['name']
         
-        analysis = comparison['analysis']
+        market = opportunity['market']
+        probability = opportunity['probability']
+        odds = opportunity['odds']
+        ev_percent = opportunity['ev_percent']
         
-        # Emojis para visualização
-        emoji_fire = '🔥'
-        emoji_chart = '📊'
-        emoji_money = '💰'
-        emoji_warning = '⚠️'
+        # Calcular odds justas (implícitas)
+        fair_odds = 100 / probability
         
-        message = f"{emoji_fire} **OPORTUNIDADE EV+ DETECTADA NO HT 0-0!**\n\n"
-        message += f"**Jogo:** {match_info['home_team']} vs {match_info['away_team']}\n"
-        message += f"**Liga:** {match_info['league']}\n"
-        message += f"**Placar HT:** 0-0\n\n"
+        # Calcular prejuízo esperado em 100 apostas
+        stake_per_bet = 10  # $10 por aposta (exemplo)
+        total_staked = stake_per_bet * 100
+        expected_return = (probability / 100) * odds * stake_per_bet * 100
+        expected_loss = total_staked - expected_return
         
-        message += f"{emoji_chart} **ANÁLISE {comparison['best_market']}**\n"
-        message += f"• Odd: {analysis['odds']}\n"
-        message += f"• Probabilidade: {analysis['probability']*100:.1f}%\n"
-        message += f"• **EV: +{analysis['ev_percentage']:.2f}%**\n"
-        message += f"• Confiança: {analysis['confidence']*100:.0f}%\n\n"
+        # Escapar caracteres especiais
+        def escape_md(text):
+            special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+            for char in special_chars:
+                text = text.replace(char, f'\\{char}')
+            return text
         
-        message += f"{emoji_money} **GESTÃO DE BANCA**\n"
-        message += f"• Kelly Completo: {analysis['kelly_full']:.1f}%\n"
-        message += f"• Kelly Conservador: {analysis['kelly_conservative']:.1f}%\n"
-        message += f"• **Stake Recomendado: {analysis['recommended_stake']:.1f}%**\n\n"
+        home_escaped = escape_md(home_team)
+        away_escaped = escape_md(away_team)
+        league_escaped = escape_md(league)
         
-        # Se houver alternativa
-        if comparison.get('alternative'):
-            alt = comparison['alternative']['analysis']
-            message += f"**Alternativa - {comparison['alternative']['market']}:**\n"
-            message += f"Odd {alt['odds']} | EV +{alt['ev_percentage']:.1f}% | Stake {alt['recommended_stake']:.1f}%\n\n"
-        
-        message += f"{emoji_warning} *Gestão conservadora: usando 25% do Kelly*\n"
-        message += f"*Stake ajustado pela confiança do modelo*"
+        message = (
+            f"📚 *ALERTA EDUCATIVO \\- EV NEGATIVO* ⚠️\n\n"
+            f"⚽ *Jogo:* {home_escaped} vs {away_escaped}\n"
+            f"🏆 *Liga:* {league_escaped}\n"
+            f"📊 *Situação:* HT 0\\-0\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 *Mercado:* {escape_md(market)}\n"
+            f"📈 *Probabilidade calculada:* {probability:.1f}%\n"
+            f"💵 *Odds oferecidas:* {odds:.2f}\n"
+            f"⚡ *Expected Value:* {ev_percent:.1f}% \\(NEGATIVO\\)\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"❌ *POR QUE NÃO APOSTAR?*\n\n"
+            f"🔢 *Matemática:*\n"
+            f"• Odds justas: {fair_odds:.2f}\n"
+            f"• Odds oferecidas: {odds:.2f}\n"
+            f"• Diferença: {escape_md(f'{fair_odds - odds:.2f}')} pontos ABAIXO\n\n"
+            f"💸 *Simulação \\(100 apostas de $10\\):*\n"
+            f"• Total apostado: ${total_staked:.0f}\n"
+            f"• Retorno esperado: ${expected_return:.0f}\n"
+            f"• Prejuízo esperado: ${escape_md(f'-{expected_loss:.0f}')}\n\n"
+            f"📉 *A longo prazo, você PERDE dinheiro\\!*\n\n"
+            f"💡 *Lição:* Só aposte em EV\\+ \\(≥\\+5%\\)\\.\n"
+            f"Odds ruins = Prejuízo garantido no longo prazo\\."
+        )
         
         return message
+    
+    def compare_markets(self, opportunities: List[Dict]) -> Optional[Dict]:
+        """
+        Compara oportunidades e retorna a melhor (maior EV+)
+        
+        Args:
+            opportunities: Lista de oportunidades detectadas
+        
+        Returns:
+            Melhor oportunidade ou None
+        """
+        # Filtrar apenas EV+
+        ev_positive = [opp for opp in opportunities if opp['is_ev_positive']]
+        
+        if not ev_positive:
+            return None
+        
+        # Ordenar por EV (maior primeiro)
+        ev_positive.sort(key=lambda x: x['ev'], reverse=True)
+        
+        return ev_positive[0]
