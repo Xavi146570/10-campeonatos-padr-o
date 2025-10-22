@@ -233,7 +233,7 @@ class SantoGraalBot:
         """
         fixtures = []
         
-        for league_id in Config.LEAGUES:
+        for league_id in Config.get_active_leagues():
             try:
                 url = f"{self.base_url}/fixtures"
                 params = {
