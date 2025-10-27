@@ -1,662 +1,384 @@
 """
-Santo Graal Bot EV+ - Sistema de Detecção de Expected Value
-VERSÃO FINAL CORRIGIDA - Detecta jogos ao vivo HT 0-0
+Santo Graal Bot - Modo Best Available
+Bot completo que detecta jogos 0-0 (HT/1H/2H), ranqueia por EV e notifica TOP 2
 """
 
-import os
-import sys
-import time
 import requests
-import logging
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Tuple
-from dotenv import load_dotenv
-
-# Imports para HTTP endpoint (Render Web Service)
+import time
+from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from threading import Thread
+import threading
+import logging
 
-# Imports locais
-from config_santo_graal import Config
+import config_santo_graal as config
 from probability_calculator_santo_graal import ProbabilityCalculator
 from ev_detector_santo_graal import EVDetector
 
-# Carregar variáveis de ambiente
-load_dotenv()
-
-# Configuração de logging
+# ========================
+# CONFIGURAÇÃO DE LOGGING
+# ========================
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=getattr(logging, config.LOG_LEVEL),
+    format=config.LOG_FORMAT
 )
 logger = logging.getLogger(__name__)
 
-
-# ============================================================
-# HTTP Health Check para Render Web Service
-# ============================================================
-
+# ========================
+# HTTP SERVER (RENDER)
+# ========================
 class HealthCheckHandler(BaseHTTPRequestHandler):
-    """Handler para health check - mantém Render Web Service ativo"""
-    
+    """Handler para health check do Render."""
     def do_GET(self):
-        """Responde a requisições GET com status do bot"""
         self.send_response(200)
-        self.send_header('Content-type', 'text/html; charset=utf-8')
+        self.send_header('Content-type', 'text/html')
         self.end_headers()
-        
-        html = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Santo Graal Bot EV+</title>
-            <meta charset="UTF-8">
-            <style>
-                body { 
-                    font-family: 'Segoe UI', Arial, sans-serif;
-                    text-align: center; 
-                    padding: 50px;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    color: white;
-                    margin: 0;
-                }
-                .container {
-                    background: rgba(255,255,255,0.15);
-                    backdrop-filter: blur(10px);
-                    padding: 40px;
-                    border-radius: 20px;
-                    display: inline-block;
-                    box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
-                }
-                h1 { margin: 0 0 20px 0; font-size: 2.5em; }
-                .status { 
-                    font-size: 1.2em; 
-                    margin: 15px 0;
-                    padding: 10px;
-                    background: rgba(255,255,255,0.1);
-                    border-radius: 10px;
-                }
-                .emoji { font-size: 3em; margin: 20px 0; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="emoji">🤖⚽</div>
-                <h1>Santo Graal Bot EV+</h1>
-                <div class="status">✅ Bot está ONLINE e funcionando!</div>
-                <div class="status">🔄 Monitorando jogos 24/7</div>
-                <div class="status">📊 Detectando oportunidades EV+</div>
-            </div>
-        </body>
-        </html>
-        """
-        self.wfile.write(html.encode('utf-8'))
+        self.wfile.write(b'Santo Graal Bot is running!')
     
     def log_message(self, format, *args):
-        """Silenciar logs HTTP para não poluir console"""
-        pass
+        pass  # Silenciar logs HTTP
 
+def start_http_server():
+    """Inicia servidor HTTP em background."""
+    server = HTTPServer(('0.0.0.0', config.HTTP_PORT), HealthCheckHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    logger.info(f"🌐 HTTP server started on port {config.HTTP_PORT}")
 
-def run_health_check_server():
-    """Inicia servidor HTTP na porta especificada (10000 no Render)"""
-    port = int(os.getenv('PORT', 10000))
-    try:
-        server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
-        logger.info(f"🌐 Servidor HTTP iniciado na porta {port}")
-        server.serve_forever()
-    except Exception as e:
-        logger.error(f"❌ Erro ao iniciar servidor HTTP: {e}")
-
-
-# ============================================================
-# Funções Auxiliares
-# ============================================================
-
-def send_telegram_notification(message: str) -> bool:
-    """
-    Envia notificação via Telegram
-    
-    Args:
-        message: Mensagem a enviar (suporta Markdown)
-    
-    Returns:
-        True se enviado com sucesso, False caso contrário
-    """
-    try:
-        token = os.getenv('TELEGRAM_BOT_TOKEN')
-        chat_id = os.getenv('TELEGRAM_CHAT_ID')
-        
-        if not token or not chat_id:
-            logger.error("❌ TELEGRAM_BOT_TOKEN ou TELEGRAM_CHAT_ID não configurados")
-            return False
-        
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        
-        payload = {
-            'chat_id': chat_id,
-            'text': message,
-            'parse_mode': 'MarkdownV2',
-            'disable_web_page_preview': True
-        }
-        
-        response = requests.post(url, json=payload, timeout=10)
-        
-        if response.status_code == 200:
-            return True
-        else:
-            logger.error(f"❌ Erro ao enviar Telegram: {response.text}")
-            return False
-            
-    except Exception as e:
-        logger.error(f"❌ Exceção ao enviar Telegram: {e}")
-        return False
-
-
-# ============================================================
-# Classe Principal do Bot
-# ============================================================
-
+# ========================
+# SANTO GRAAL BOT
+# ========================
 class SantoGraalBot:
-    """Bot principal que monitora jogos e detecta oportunidades EV+"""
+    """Bot principal com Modo Best Available."""
     
     def __init__(self):
-        """Inicializa o bot"""
-        self.api_key = os.getenv('API_FOOTBALL_KEY')
+        self.api_key = config.API_FOOTBALL_KEY
+        self.telegram_token = config.TELEGRAM_BOT_TOKEN
+        self.chat_id = config.TELEGRAM_CHAT_ID
+        self.base_url = config.API_FOOTBALL_BASE_URL
         
-        if not self.api_key:
-            raise ValueError("❌ API_FOOTBALL_KEY não encontrada no .env")
-        
-        self.base_url = "https://v3.football.api-sports.io"
-        self.headers = {
-            'x-apisports-key': self.api_key
-        }
-        
-        self.probability_calculator = ProbabilityCalculator()
+        self.prob_calculator = ProbabilityCalculator()
         self.ev_detector = EVDetector()
         
-        # Cache para evitar notificações duplicadas
-        self.notified_fixtures = set()
+        self.leagues = config.LEAGUES
+        self.smart_mode_config = config.SMART_MODE_CONFIG
         
-        logger.info("Santo Graal Bot EV+ inicializado")
+        self.best_available_mode = config.ENABLE_BEST_AVAILABLE_MODE
+        self.best_available_count = config.BEST_AVAILABLE_COUNT
+        
+        logger.info("✅ Santo Graal Bot inicializado")
+        logger.info(f"🎯 Modo Best Available: {'ATIVO' if self.best_available_mode else 'DESATIVADO'}")
+        logger.info(f"📊 TOP {self.best_available_count} jogos por ciclo")
     
-    def get_upcoming_fixtures(self, hours_ahead: int = 24) -> List[Dict]:
-        """
-        Busca jogos próximos nas ligas configuradas
+    def get_active_leagues(self):
+        """Retorna ligas ativas baseado no Smart Mode (horário UTC)."""
+        current_hour = datetime.utcnow().hour
         
-        Args:
-            hours_ahead: Quantas horas à frente buscar
-        
-        Returns:
-            Lista de fixtures
-        """
-        fixtures = []
-        
-        now = datetime.now(timezone.utc)
-        date_from = now.strftime('%Y-%m-%d')
-        date_to = (now + timedelta(hours=hours_ahead)).strftime('%Y-%m-%d')
-        
-        for league_id in Config.get_active_leagues():
-            try:
-                url = f"{self.base_url}/fixtures"
-                params = {
-                    'league': league_id,
-                    'season': Config.SEASON,
-                    'from': date_from,
-                    'to': date_to
-                }
-                
-                response = requests.get(url, headers=self.headers, params=params, timeout=10)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get('response'):
-                        fixtures.extend(data['response'])
-                else:
-                    logger.warning(f"⚠️ Erro ao buscar fixtures da liga {league_id}: {response.status_code}")
-                
-                time.sleep(0.5)  # Rate limiting
-                
-            except Exception as e:
-                logger.error(f"❌ Exceção ao buscar fixtures da liga {league_id}: {e}")
-        
-        return fixtures
-    
-    def get_live_fixtures(self) -> List[Dict]:
-        """
-        Busca jogos ao vivo nas ligas configuradas
-        ⚠️ CRÍTICO: NÃO usar 'season' com 'live'!
-        
-        Returns:
-            Lista de fixtures ao vivo
-        """
-        fixtures = []
-        
-        for league_id in Config.get_active_leagues():
-            try:
-                url = f"{self.base_url}/fixtures"
-                params = {
-                    'league': league_id,
-                    # NÃO INCLUIR 'season' aqui! API não aceita com 'live'
-                    'live': 'all'
-                }
-                
-                response = requests.get(url, headers=self.headers, params=params, timeout=10)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get('response'):
-                        fixtures.extend(data['response'])
-                        logger.info(f"✅ Liga {league_id}: {len(data['response'])} jogos ao vivo")
-                else:
-                    logger.warning(f"⚠️ Erro ao buscar live fixtures da liga {league_id}: {response.status_code}")
-                
-                time.sleep(0.5)  # Rate limiting
-                
-            except Exception as e:
-                logger.error(f"❌ Exceção ao buscar live fixtures da liga {league_id}: {e}")
-        
-        return fixtures
-    
-    def get_fixture_statistics(self, fixture_id: int) -> Optional[Dict]:
-        """
-        Busca estatísticas de um jogo específico
-        
-        Args:
-            fixture_id: ID do jogo
-        
-        Returns:
-            Dicionário com estatísticas ou None
-        """
-        try:
-            url = f"{self.base_url}/fixtures/statistics"
-            params = {'fixture': fixture_id}
+        for period, config_data in self.smart_mode_config.items():
+            start_hour, end_hour = config_data['hours']
             
-            response = requests.get(url, headers=self.headers, params=params, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('response'):
-                    return data['response']
+            # Tratamento especial para período que cruza meia-noite
+            if start_hour > end_hour:  # Ex: 21h-03h
+                if current_hour >= start_hour or current_hour < end_hour:
+                    logger.info(f"⏰ Smart Mode: {period} ({start_hour}h-{end_hour}h UTC)")
+                    return config_data['active_leagues'], config_data['check_interval']
             else:
-                logger.warning(f"⚠️ Erro ao buscar estatísticas do jogo {fixture_id}: {response.status_code}")
-            
-        except Exception as e:
-            logger.error(f"❌ Exceção ao buscar estatísticas do jogo {fixture_id}: {e}")
+                if start_hour <= current_hour < end_hour:
+                    logger.info(f"⏰ Smart Mode: {period} ({start_hour}h-{end_hour}h UTC)")
+                    return config_data['active_leagues'], config_data['check_interval']
         
-        return None
+        # Fallback (não deveria acontecer)
+        logger.warning("⚠️ Smart Mode fallback - usando configuração padrão")
+        return list(self.leagues.keys())[:10], 180
     
-    def get_team_statistics(self, team_id: int, league_id: int) -> Optional[Dict]:
+    def is_game_0x0(self, fixture):
         """
-        Busca estatísticas de um time na temporada
+        Verifica se o jogo está 0-0 em qualquer momento válido (HT, 1H, 2H).
         
         Args:
-            team_id: ID do time
-            league_id: ID da liga
+            fixture (dict): Dados da partida
         
         Returns:
-            Dicionário com estatísticas ou None
+            bool: True se jogo está 0-0 em momento válido
         """
+        status = fixture['fixture']['status']['short']
+        home_score = fixture['goals']['home']
+        away_score = fixture['goals']['away']
+        
+        # Status válidos: HT (Intervalo), 1H (1º Tempo), 2H (2º Tempo)
+        valid_statuses = ['HT', '1H', '2H']
+        
+        if status in valid_statuses and home_score == 0 and away_score == 0:
+            logger.info(f"✅ 0-0 detectado ({status}): {fixture['teams']['home']['name']} vs {fixture['teams']['away']['name']}")
+            return True
+        
+        return False
+    
+    def get_live_fixtures(self, league_id):
+        """
+        Busca partidas ao vivo de uma liga específica.
+        
+        Args:
+            league_id (int): ID da liga
+        
+        Returns:
+            list: Lista de fixtures ou lista vazia em caso de erro
+        """
+        url = f"{self.base_url}/fixtures"
+        headers = {
+            'x-apisports-key': self.api_key
+        }
+        params = {
+            'league': league_id,
+            'live': 'all'  # IMPORTANTE: Não incluir 'season' ao buscar jogos ao vivo
+        }
+        
         try:
-            url = f"{self.base_url}/teams/statistics"
-            params = {
-                'team': team_id,
-                'league': league_id,
-                'season': Config.SEASON
-            }
+            response = requests.get(url, headers=headers, params=params, timeout=config.API_REQUEST_TIMEOUT)
+            response.raise_for_status()
             
-            response = requests.get(url, headers=self.headers, params=params, timeout=10)
+            data = response.json()
             
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('response'):
-                    return data['response']
+            if data.get('results', 0) > 0:
+                return data['response']
+            
+            return []
+        
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ Erro ao buscar fixtures da liga {league_id}: {e}")
+            return []
+    
+    def get_multipliers(self, status):
+        """
+        Retorna multiplicadores baseados no status do jogo.
+        
+        Args:
+            status (str): Status do jogo (HT, 1H, 2H)
+        
+        Returns:
+            tuple: (multiplier_over_05, multiplier_over_15)
+        """
+        if status == 'HT':
+            return (config.HALFTIME_0X0_MULTIPLIER_OVER_05, config.HALFTIME_0X0_MULTIPLIER_OVER_15)
+        elif status == '2H':
+            return (config.SECOND_HALF_0X0_MULTIPLIER_OVER_05, config.SECOND_HALF_0X0_MULTIPLIER_OVER_15)
+        else:  # 1H ou outros
+            return (config.HALFTIME_0X0_MULTIPLIER_OVER_05, config.HALFTIME_0X0_MULTIPLIER_OVER_15)
+    
+    def analyze_fixture(self, fixture, league_name):
+        """
+        Analisa uma partida 0-0 e retorna oportunidades de apostas.
+        
+        Args:
+            fixture (dict): Dados da partida
+            league_name (str): Nome da liga
+        
+        Returns:
+            list: Lista de dicionários com oportunidades
+        """
+        opportunities = []
+        
+        # Calcular probabilidades base
+        probs = self.prob_calculator.calculate_probabilities(
+            fixture['teams']['home']['id'],
+            fixture['teams']['away']['id'],
+            fixture['league']['id']
+        )
+        
+        if not probs:
+            logger.warning(f"⚠️ Não foi possível calcular probabilidades para {fixture['teams']['home']['name']} vs {fixture['teams']['away']['name']}")
+            return opportunities
+        
+        # Aplicar multiplicadores baseado no status
+        status = fixture['fixture']['status']['short']
+        mult_05, mult_15 = self.get_multipliers(status)
+        
+        prob_over_05 = min(probs['over_05'] * mult_05, 100.0)
+        prob_over_15 = min(probs['over_15'] * mult_15, 100.0)
+        
+        # Mock de odds (em produção, usar API de odds real)
+        # Aqui simulamos odds baseadas na probabilidade inversa com margem
+        offered_odds_05 = (100 / prob_over_05) * 0.95  # 5% margem da casa
+        offered_odds_15 = (100 / prob_over_15) * 0.95
+        
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Analisar Over 0.5
+        ev_05 = self.ev_detector.calculate_ev(prob_over_05, offered_odds_05)
+        kelly_05 = self.ev_detector.calculate_kelly(prob_over_05, offered_odds_05)
+        
+        opportunities.append({
+            'fixture': fixture,
+            'league_name': league_name,
+            'market': 'Over 0.5 Goals (2nd Half)',
+            'probability': prob_over_05,
+            'offered_odds': offered_odds_05,
+            'ev': ev_05,
+            'kelly': kelly_05,
+            'timestamp': timestamp
+        })
+        
+        # Analisar Over 1.5
+        ev_15 = self.ev_detector.calculate_ev(prob_over_15, offered_odds_15)
+        kelly_15 = self.ev_detector.calculate_kelly(prob_over_15, offered_odds_15)
+        
+        opportunities.append({
+            'fixture': fixture,
+            'league_name': league_name,
+            'market': 'Over 1.5 Goals (2nd Half)',
+            'probability': prob_over_15,
+            'offered_odds': offered_odds_15,
+            'ev': ev_15,
+            'kelly': kelly_15,
+            'timestamp': timestamp
+        })
+        
+        return opportunities
+    
+    def rank_opportunities(self, opportunities):
+        """
+        Ranqueia oportunidades por qualidade (EV+ e odds > fair primeiro, depois maior EV).
+        
+        Args:
+            opportunities (list): Lista de oportunidades
+        
+        Returns:
+            list: Lista ordenada com ranking adicionado
+        """
+        # Adicionar score de ranking
+        for opp in opportunities:
+            ev = opp['ev']
+            prob = opp['probability']
+            offered_odds = opp['offered_odds']
+            fair_odds = 100 / prob
+            
+            # Prioridade 1: EV positivo E odds acima da justa
+            if ev >= config.MIN_EV_POSITIVE and offered_odds > fair_odds:
+                bonus = 1000  # Grande bônus
+            # Prioridade 2: EV positivo (mesmo se odds < fair)
+            elif ev >= 0:
+                bonus = 500
+            # Prioridade 3: EV negativo mas próximo de zero
             else:
-                logger.warning(f"⚠️ Erro ao buscar estatísticas do time {team_id}: {response.status_code}")
+                bonus = 0
             
-        except Exception as e:
-            logger.error(f"❌ Exceção ao buscar estatísticas do time {team_id}: {e}")
+            # Score = bônus + EV normalizado + probabilidade pequena
+            opp['rank_score'] = bonus + (ev * 1000) + (prob * 0.1)
         
-        return None
+        # Ordenar por score (maior = melhor)
+        ranked = sorted(opportunities, key=lambda x: x['rank_score'], reverse=True)
+        
+        # Adicionar número do ranking
+        for idx, opp in enumerate(ranked, 1):
+            opp['rank'] = idx
+        
+        return ranked
     
-    def get_h2h(self, team1_id: int, team2_id: int, last_n: int = 10) -> List[Dict]:
+    def send_telegram_message(self, message):
         """
-        Busca histórico de confrontos diretos
+        Envia mensagem para o Telegram.
         
         Args:
-            team1_id: ID do primeiro time
-            team2_id: ID do segundo time
-            last_n: Número de jogos a buscar
+            message (str): Mensagem formatada em MarkdownV2
         
         Returns:
-            Lista de confrontos
+            bool: True se enviado com sucesso
         """
-        try:
-            url = f"{self.base_url}/fixtures/headtohead"
-            params = {
-                'h2h': f"{team1_id}-{team2_id}",
-                'last': last_n
-            }
-            
-            response = requests.get(url, headers=self.headers, params=params, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('response'):
-                    return data['response']
-            else:
-                logger.warning(f"⚠️ Erro ao buscar H2H {team1_id}-{team2_id}: {response.status_code}")
-            
-        except Exception as e:
-            logger.error(f"❌ Exceção ao buscar H2H {team1_id}-{team2_id}: {e}")
-        
-        return []
-    
-    def get_odds(self, fixture_id: int) -> Optional[Dict]:
-        """
-        Busca odds de um jogo específico
-        
-        Args:
-            fixture_id: ID do jogo
-        
-        Returns:
-            Dicionário com odds ou None
-        """
-        try:
-            url = f"{self.base_url}/odds"
-            params = {
-                'fixture': fixture_id,
-                'bookmaker': Config.BOOKMAKER_ID
-            }
-            
-            response = requests.get(url, headers=self.headers, params=params, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('response'):
-                    return data['response'][0] if data['response'] else None
-            else:
-                logger.warning(f"⚠️ Erro ao buscar odds do jogo {fixture_id}: {response.status_code}")
-            
-        except Exception as e:
-            logger.error(f"❌ Exceção ao buscar odds do jogo {fixture_id}: {e}")
-        
-        return None
-    
-    def extract_over_odds(self, odds_data: Dict) -> Tuple[Optional[float], Optional[float]]:
-        """
-        Extrai odds de Over 0.5 e Over 1.5 dos dados da API
-        
-        Args:
-            odds_data: Dados de odds da API
-        
-        Returns:
-            Tuple (over_05_odds, over_15_odds)
-        """
-        over_05 = None
-        over_15 = None
-        
-        if not odds_data or 'bookmakers' not in odds_data:
-            return over_05, over_15
+        url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
+        payload = {
+            'chat_id': self.chat_id,
+            'text': message,
+            'parse_mode': config.TELEGRAM_PARSE_MODE
+        }
         
         try:
-            bookmakers = odds_data['bookmakers']
-            
-            for bookmaker in bookmakers:
-                if 'bets' not in bookmaker:
-                    continue
-                
-                for bet in bookmaker['bets']:
-                    if bet['name'] == 'Goals Over/Under':
-                        for value in bet['values']:
-                            if value['value'] == 'Over 0.5':
-                                over_05 = float(value['odd'])
-                            elif value['value'] == 'Over 1.5':
-                                over_15 = float(value['odd'])
+            response = requests.post(url, json=payload, timeout=10)
+            response.raise_for_status()
+            logger.info("✅ Mensagem enviada com sucesso para Telegram")
+            return True
         
-        except Exception as e:
-            logger.error(f"❌ Erro ao extrair odds: {e}")
-        
-        return over_05, over_15
-    
-    def check_0x0_draw_rate(self, team1_stats: Dict, team2_stats: Dict) -> bool:
-        """
-        Verifica se ambos os times têm taxa de empate 0-0 <= 15%
-        
-        Args:
-            team1_stats: Estatísticas do time 1
-            team2_stats: Estatísticas do time 2
-        
-        Returns:
-            True se ambos atendem o critério
-        """
-        try:
-            # Time 1
-            fixtures1 = team1_stats.get('fixtures', {})
-            draws1 = fixtures1.get('draws', {}).get('total', 0)
-            total1 = fixtures1.get('played', {}).get('total', 0)
-            
-            if total1 == 0:
-                return False
-            
-            draw_rate1 = (draws1 / total1) * 100
-            
-            # Time 2
-            fixtures2 = team2_stats.get('fixtures', {})
-            draws2 = fixtures2.get('draws', {}).get('total', 0)
-            total2 = fixtures2.get('played', {}).get('total', 0)
-            
-            if total2 == 0:
-                return False
-            
-            draw_rate2 = (draws2 / total2) * 100
-            
-            logger.info(f"📊 Taxa empate 0-0: Time1={draw_rate1:.1f}%, Time2={draw_rate2:.1f}%")
-            
-            return draw_rate1 <= Config.MAX_DRAW_RATE and draw_rate2 <= Config.MAX_DRAW_RATE
-        
-        except Exception as e:
-            logger.error(f"❌ Erro ao verificar taxa de empate: {e}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ Erro ao enviar mensagem Telegram: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                logger.error(f"Response: {e.response.text}")
             return False
-    
-    def is_halftime_0x0(self, fixture: Dict) -> bool:
-        """
-        Verifica se o jogo está 0-0 no intervalo
-        
-        Args:
-            fixture: Dados do jogo
-        
-        Returns:
-            True se está 0-0 no HT
-        """
-        try:
-            status = fixture.get('fixture', {}).get('status', {})
-            short_status = status.get('short', '')
-            
-            # Verificar se está no intervalo
-            if short_status != 'HT':
-                return False
-            
-            # Verificar placar
-            score = fixture.get('score', {})
-            halftime = score.get('halftime', {})
-            home = halftime.get('home')
-            away = halftime.get('away')
-            
-            return home == 0 and away == 0
-        
-        except Exception as e:
-            logger.error(f"❌ Erro ao verificar HT 0-0: {e}")
-            return False
-    
-    def process_fixture(self, fixture: Dict):
-        """
-        Processa um jogo e detecta oportunidades EV+
-        
-        Args:
-            fixture: Dados do jogo
-        """
-        try:
-            fixture_id = fixture['fixture']['id']
-            
-            # Evitar processar múltiplas vezes
-            if fixture_id in self.notified_fixtures:
-                return
-            
-            home_team = fixture['teams']['home']
-            away_team = fixture['teams']['away']
-            league = fixture['league']
-            
-            logger.info(f"🔍 Processando: {home_team['name']} vs {away_team['name']}")
-            
-            # Buscar estatísticas dos times
-            home_stats = self.get_team_statistics(home_team['id'], league['id'])
-            away_stats = self.get_team_statistics(away_team['id'], league['id'])
-            
-            if not home_stats or not away_stats:
-                logger.warning("⚠️ Não foi possível obter estatísticas dos times")
-                return
-            
-            # Verificar taxa de empate 0-0
-            if not self.check_0x0_draw_rate(home_stats, away_stats):
-                logger.info("❌ Times não atendem critério de taxa de empate 0-0")
-                return
-            
-            # Buscar H2H
-            h2h_matches = self.get_h2h(home_team['id'], away_team['id'])
-            
-            # Calcular probabilidades
-            match_data = {
-                'home_stats': home_stats,
-                'away_stats': away_stats,
-                'h2h': h2h_matches,
-                'is_ht_0x0': True  # Sabemos que está 0-0 no HT
-            }
-            
-            prob_over_05, prob_over_15 = self.probability_calculator.calculate_probabilities(match_data)
-            
-            logger.info(f"📊 Probabilidades: Over 0.5 = {prob_over_05:.1f}%, Over 1.5 = {prob_over_15:.1f}%")
-            
-            # Buscar odds
-            odds_data = self.get_odds(fixture_id)
-            
-            if not odds_data:
-                logger.warning("⚠️ Não foi possível obter odds")
-                return
-            
-            over_05_odds, over_15_odds = self.extract_over_odds(odds_data)
-            
-            if not over_05_odds or not over_15_odds:
-                logger.warning("⚠️ Odds Over 0.5/1.5 não disponíveis")
-                return
-            
-            logger.info(f"💰 Odds: Over 0.5 = {over_05_odds}, Over 1.5 = {over_15_odds}")
-            
-            # Detectar EV+
-            opportunities = self.ev_detector.detect_ev_opportunities(
-                prob_over_05=prob_over_05,
-                prob_over_15=prob_over_15,
-                over_05_odds=over_05_odds,
-                over_15_odds=over_15_odds
-            )
-            
-            # Processar oportunidades EV+
-            for opp in opportunities:
-                if opp['is_ev_positive']:
-                    message = self.ev_detector.format_ev_message(
-                        fixture=fixture,
-                        opportunity=opp
-                    )
-                    
-                    if send_telegram_notification(message):
-                        logger.info("✅ Notificação EV+ enviada!")
-                        self.notified_fixtures.add(fixture_id)
-                    else:
-                        logger.error("❌ Falha ao enviar notificação EV+")
-                
-                # Enviar notificação EV- se configurado
-                elif Config.SEND_EV_NEGATIVE:
-                    message = self.ev_detector.format_ev_negative_message(
-                        fixture=fixture,
-                        opportunity=opp
-                    )
-                    
-                    send_telegram_notification(message)
-                    logger.info("📚 Notificação EV- (educativa) enviada")
-        
-        except Exception as e:
-            logger.error(f"❌ Erro ao processar fixture: {e}")
     
     def run(self):
-        """Executa o loop principal do bot"""
-        logger.info("🚀 Santo Graal Bot EV+ iniciado!")
+        """Loop principal do bot."""
+        logger.info("🚀 Santo Graal Bot iniciando...")
+        logger.info(f"🎯 {len(self.leagues)} ligas configuradas")
         
         while True:
             try:
-                # Verificar jogos próximos (próximas 24h)
-                logger.info("⏰ Verificando jogos nas próximas 24h...")
-                upcoming = self.get_upcoming_fixtures(hours_ahead=24)
-                logger.info(f"Encontrados {len(upcoming)} jogos próximos")
+                # Determinar ligas ativas e intervalo baseado no Smart Mode
+                active_league_names, check_interval = self.get_active_leagues()
+                active_league_ids = [self.leagues[name] for name in active_league_names if name in self.leagues]
                 
-                # Verificar jogos ao vivo 0-0 no HT
-                logger.info("🔴 Verificando jogos ao vivo...")
-                live = self.get_live_fixtures()
+                logger.info(f"🔴 Verificando jogos ao vivo em {len(active_league_ids)} ligas...")
                 
-                logger.info(f"📊 Total de jogos ao vivo retornados: {len(live)}")
+                all_opportunities = []
                 
-                # Filtrar apenas jogos 0-0 no HT
-                ht_0x0_fixtures = [f for f in live if self.is_halftime_0x0(f)]
+                # Buscar jogos 0-0 em todas as ligas ativas
+                for league_name in active_league_names:
+                    if league_name not in self.leagues:
+                        continue
+                    
+                    league_id = self.leagues[league_name]
+                    fixtures = self.get_live_fixtures(league_id)
+                    
+                    for fixture in fixtures:
+                        if self.is_game_0x0(fixture):
+                            # Analisar e adicionar oportunidades
+                            opportunities = self.analyze_fixture(fixture, league_name)
+                            all_opportunities.extend(opportunities)
                 
-                logger.info(f"Encontrados {len(ht_0x0_fixtures)} jogos ao vivo 0-0")
+                # Se houver oportunidades, ranquear e notificar TOP N
+                if all_opportunities:
+                    logger.info(f"🎯 {len(all_opportunities)} oportunidades encontradas")
+                    
+                    # Ranquear
+                    ranked_opportunities = self.rank_opportunities(all_opportunities)
+                    
+                    # Enviar TOP N
+                    if self.best_available_mode:
+                        message = self.ev_detector.format_best_available_message(ranked_opportunities)
+                        if message:
+                            self.send_telegram_message(message)
+                            logger.info(f"✅ TOP {self.best_available_count} oportunidades enviadas")
+                    else:
+                        # Modo legado: enviar apenas EV+
+                        for opp in ranked_opportunities:
+                            if opp['ev'] >= config.MIN_EV_POSITIVE:
+                                message = self.ev_detector.format_ev_message(
+                                    opp['fixture'], opp['league_name'], opp['market'],
+                                    opp['probability'], opp['offered_odds'],
+                                    opp['ev'], opp['kelly'], opp['timestamp']
+                                )
+                                self.send_telegram_message(message)
+                else:
+                    logger.info("⏳ Nenhum jogo 0-0 encontrado no momento")
                 
-                # Processar jogos 0-0 no HT
-                for fixture in ht_0x0_fixtures:
-                    self.process_fixture(fixture)
-                    time.sleep(1)  # Rate limiting
-                
-                # Aguardar antes do próximo ciclo
-                logger.info(f"💤 Aguardando {Config.CHECK_INTERVAL} segundos até próxima verificação...")
-                time.sleep(Config.CHECK_INTERVAL)
+                # Aguardar próximo ciclo
+                logger.info(f"⏰ Próxima verificação em {check_interval}s")
+                time.sleep(check_interval)
             
             except KeyboardInterrupt:
-                logger.info("⚠️ Bot interrompido pelo usuário")
+                logger.info("⛔ Bot interrompido pelo usuário")
                 break
             
             except Exception as e:
-                logger.error(f"❌ Erro no loop principal: {e}")
-                time.sleep(60)  # Aguardar 1 minuto em caso de erro
+                logger.error(f"❌ Erro no loop principal: {e}", exc_info=True)
+                time.sleep(60)  # Aguardar 1 minuto antes de tentar novamente
 
-
-# ============================================================
-# Função Principal
-# ============================================================
-
-def main():
-    """Função principal"""
+# ========================
+# MAIN
+# ========================
+if __name__ == "__main__":
+    # Validar configuração
+    config.validate_config()
     
-    # Iniciar servidor HTTP em thread separada (para Render Web Service)
-    health_thread = Thread(target=run_health_check_server, daemon=True)
-    health_thread.start()
-    logger.info(f"✅ Health check endpoint ativo na porta {os.getenv('PORT', 10000)}")
-    
-    bot = SantoGraalBot()
-    
-    try:
-        # Enviar mensagem de inicialização
-        startup_message = (
-            "🤖 *Santo Graal Bot EV\\+ Iniciado\\!*\n\n"
-            f"📊 *Ligas totais:* {len(Config.LEAGUES)}\n"
-            f"⚡ *EV mínimo:* \\+{int(Config.MIN_EV_PERCENT)}%\n"
-            f"💰 *Stake máximo:* {int(Config.MAX_STAKE_PERCENT)}% da banca\n"
-            f"🎯 *Kelly Criterion:* {int(Config.KELLY_FRACTION * 100)}% conservador\n\n"
-            "✅ Sistema pronto\\! Monitorando jogos 24/7"
-        )
-        send_telegram_notification(startup_message)
-    except Exception as e:
-        logger.error(f"❌ Erro ao enviar Telegram: {e}")
+    # Iniciar HTTP server
+    start_http_server()
     
     # Iniciar bot
+    bot = SantoGraalBot()
     bot.run()
-
-
-if __name__ == "__main__":
-    main()
