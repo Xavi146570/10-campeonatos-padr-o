@@ -1,9 +1,3 @@
-# Ver o requirements.txt atual
-cat requirements.txt
-
-# Se não tiver estes pacotes, adicionar:
-cat >> requirements.txt << EOF
 requests==2.31.0
 python-dotenv==1.0.0
 colorlog==6.7.0
-EOF
