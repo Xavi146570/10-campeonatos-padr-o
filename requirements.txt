@@ -1,10 +1,9 @@
-# Santo Graal Bot EV+ - Dependências Python
+# Ver o requirements.txt atual
+cat requirements.txt
 
-# Requisições HTTP
+# Se não tiver estes pacotes, adicionar:
+cat >> requirements.txt << EOF
 requests==2.31.0
-
-# Variáveis de ambiente
 python-dotenv==1.0.0
-
-# Logging avançado (opcional)
-colorlog==6.8.0
+colorlog==6.7.0
+EOF
