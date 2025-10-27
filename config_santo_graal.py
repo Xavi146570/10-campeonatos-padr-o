@@ -1,225 +1,184 @@
 """
-Configurações do Bot Santo Graal com Detecção de Valor EV+
-Versão CORRIGIDA com UEFA Champions League + 23 ligas totais
+Configuração do Santo Graal Bot - Modo Best Available
+Sistema detecta jogos 0-0 (HT/1H/2H) e notifica TOP 2 melhores oportunidades
 """
 
 import os
-from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
 
+# ========================
+# TOKENS E CREDENCIAIS
+# ========================
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+API_FOOTBALL_KEY = os.getenv('API_FOOTBALL_KEY')
 
-class Config:
-    """Classe de configuração centralizada do Santo Graal Bot EV+"""
+# ========================
+# CONFIGURAÇÃO DE LIGAS - SMART MODE
+# ========================
+# 24 ligas totais com horários de pico otimizados
+
+LEAGUES = {
+    # TIER 1 - TOP EUROPEU (Always Active)
+    'Premier League': 39,
+    'La Liga': 140,
+    'Champions League': 2,  # UEFA Champions League
     
-    # ===== API CREDENTIALS =====
-    API_FOOTBALL_KEY = os.getenv('API_FOOTBALL_KEY', '')
-    TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
-    TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
+    # TIER 2 - EUROPA PRINCIPAL (15h-03h UTC)
+    'Bundesliga': 78,
+    'Serie A': 135,
+    'Ligue 1': 61,
+    'Eredivisie': 88,
+    'Liga Portugal': 94,
+    'Championship': 40,
     
-    # ===== COMPETIÇÕES INTERNACIONAIS (PRIORIDADE MÁXIMA!) =====
-    LEAGUES_INTERNATIONAL = [
-        2,    # UEFA Champions League ⚽ ESSENCIAL!
-        3,    # UEFA Europa League
-        848,  # UEFA Conference League
-        13,   # Copa Libertadores (América do Sul)
-    ]
+    # TIER 3 - EUROPA SECUNDÁRIA (15h-03h UTC)
+    'Serie B': 136,
+    'La Liga 2': 141,
+    'Bundesliga 2': 79,
+    'Ligue 2': 62,
+    'Scottish Premiership': 179,
     
-    # ===== LIGAS NACIONAIS - TOP 5 EUROPA =====
-    LEAGUES_PRIORITY_HIGH = [
-        39,   # Premier League - Inglaterra
-        140,  # La Liga - Espanha
-        135,  # Serie A - Itália
-        78,   # Bundesliga - Alemanha
-        61,   # Ligue 1 - França
-    ]
+    # TIER 4 - GLOBAL (21h-03h UTC - Pico Global)
+    'MLS': 253,
+    'Liga MX': 262,
+    'Brasileirão': 71,
+    'Argentino': 128,
     
-    # ===== EUROPA ADICIONAL =====
-    LEAGUES_PRIORITY_MEDIUM = [
-        88,   # Eredivisie - Holanda
-        40,   # Championship - Inglaterra 2ª divisão
-        94,   # Primeira Liga - Portugal
-        144,  # Jupiler Pro League - Bélgica
-        203,  # Super Lig - Turquia
-        179,  # Scottish Premiership - Escócia
-        218,  # Austrian Bundesliga - Áustria
-        207,  # Swiss Super League - Suíça
-        235,  # Russian Premier League - Rússia
-        197,  # Greek Super League - Grécia
-    ]
-    
-    # ===== AMÉRICAS E ÁSIA =====
-    LEAGUES_PRIORITY_LOW = [
-        71,   # Brasileirão Série A - Brasil
-        262,  # Liga MX - México
-        253,  # MLS - EUA/Canadá
-        307,  # Saudi Pro League - Arábia Saudita
-        98,   # J1 League - Japão
-    ]
-    
-    # ===== TODAS AS LIGAS COMBINADAS (24 TOTAL) =====
-    LEAGUES = (
-        LEAGUES_INTERNATIONAL +  # 4 competições internacionais
-        LEAGUES_PRIORITY_HIGH +  # 5 ligas top
-        LEAGUES_PRIORITY_MEDIUM + # 10 ligas europa
-        LEAGUES_PRIORITY_LOW     # 5 américas/ásia
-    )
-    
-    LEAGUE_NAMES = {
-        # Competições Internacionais
-        2: 'UEFA Champions League ⚽🏆',
-        3: 'UEFA Europa League 🏆',
-        848: 'UEFA Conference League 🏆',
-        13: 'Copa Libertadores 🏆',
-        
-        # Top 5 Europa
-        39: 'Premier League 🏴󠁧󠁢󠁥󠁮󠁧󠁿',
-        140: 'La Liga 🇪🇸',
-        135: 'Serie A 🇮🇹',
-        78: 'Bundesliga 🇩🇪',
-        61: 'Ligue 1 🇫🇷',
-        
-        # Europa Adicional
-        88: 'Eredivisie 🇳🇱',
-        40: 'Championship 🏴󠁧󠁢󠁥󠁮󠁧󠁿',
-        94: 'Primeira Liga 🇵🇹',
-        144: 'Jupiler Pro League 🇧🇪',
-        203: 'Super Lig 🇹🇷',
-        179: 'Scottish Premiership 🏴󠁧󠁢󠁳󠁣󠁴󠁿',
-        218: 'Austrian Bundesliga 🇦🇹',
-        207: 'Swiss Super League 🇨🇭',
-        235: 'Russian Premier League 🇷🇺',
-        197: 'Greek Super League 🇬🇷',
-        
-        # Américas
-        71: 'Brasileirão Série A 🇧🇷',
-        262: 'Liga MX 🇲🇽',
-        253: 'MLS 🇺🇸',
-        
-        # Ásia/Outros
-        307: 'Saudi Pro League 🇸🇦',
-        98: 'J1 League 🇯🇵',
+    # TIER 5 - ÁSIA/OCEANIA (03h-09h UTC - Madrugada Europa)
+    'J-League': 98,
+    'K-League': 292,
+    'A-League': 188,
+    'Chinese Super League': 169,
+    'Saudi Pro League': 307,
+    'Indian Super League': 323
+}
+
+# ========================
+# SMART MODE - OTIMIZAÇÃO POR HORÁRIO
+# ========================
+SMART_MODE_CONFIG = {
+    'night': {  # 03h-09h UTC (Madrugada Europa)
+        'hours': (3, 9),
+        'active_leagues': [
+            'J-League', 'K-League', 'A-League', 'Chinese Super League',
+            'Premier League', 'La Liga'  # Top 2 Europa sempre
+        ],
+        'check_interval': 180  # 3 minutos
+    },
+    'morning': {  # 09h-15h UTC (Manhã Europa)
+        'hours': (9, 15),
+        'active_leagues': [
+            'Premier League', 'La Liga', 'Bundesliga', 'Serie A',
+            'Ligue 1', 'Eredivisie', 'Liga Portugal', 'Championship',
+            'Scottish Premiership', 'Champions League'
+        ],
+        'check_interval': 180
+    },
+    'afternoon': {  # 15h-21h UTC (Tarde Europa - PICO)
+        'hours': (15, 21),
+        'active_leagues': [
+            'Premier League', 'La Liga', 'Bundesliga', 'Serie A', 'Ligue 1',
+            'Eredivisie', 'Liga Portugal', 'Championship', 'Serie B', 'La Liga 2',
+            'Bundesliga 2', 'Ligue 2', 'Scottish Premiership', 'Champions League',
+            'MLS'
+        ],
+        'check_interval': 120  # 2 minutos - mais frequente no pico
+    },
+    'evening': {  # 21h-03h UTC (Noite Europa + Américas - PICO GLOBAL)
+        'hours': (21, 24),  # 21h-00h
+        'active_leagues': list(LEAGUES.keys()),  # TODAS as 24 ligas
+        'check_interval': 120
+    },
+    'late_night': {  # 00h-03h UTC (continuação do pico)
+        'hours': (0, 3),
+        'active_leagues': list(LEAGUES.keys()),
+        'check_interval': 120
     }
+}
+
+# ========================
+# MODO BEST AVAILABLE
+# ========================
+ENABLE_BEST_AVAILABLE_MODE = True  # ✅ Sempre notificar TOP jogos disponíveis
+BEST_AVAILABLE_COUNT = 2  # TOP 2 jogos (mesmo se EV negativo)
+MIN_EV_THRESHOLD = 0.05  # 5% - usado apenas para destacar EV+ reais
+
+# ========================
+# EXPECTED VALUE (EV)
+# ========================
+MIN_EV_POSITIVE = 0.05  # +5% mínimo para EV+ perfeito
+SHOW_EV_NEGATIVE = True  # Mostrar também EV- (educativo)
+
+# ========================
+# MULTIPLICADORES POR STATUS
+# ========================
+# Intervalo (HT) - Ambas equipes descansadas, 45 min restantes
+HALFTIME_0X0_MULTIPLIER_OVER_05 = 1.05  # +5% probabilidade Over 0.5
+HALFTIME_0X0_MULTIPLIER_OVER_15 = 1.15  # +15% probabilidade Over 1.5
+
+# 2º Tempo (2H) - Tempo correndo, mais conservador
+SECOND_HALF_0X0_MULTIPLIER_OVER_05 = 1.10  # +10% Over 0.5 (urgência)
+SECOND_HALF_0X0_MULTIPLIER_OVER_15 = 1.20  # +20% Over 1.5 (desespero)
+
+# ========================
+# KELLY CRITERION
+# ========================
+KELLY_FRACTION = 0.25  # 25% conservador (1/4 Kelly)
+
+# ========================
+# TELEGRAM
+# ========================
+TELEGRAM_PARSE_MODE = 'MarkdownV2'
+
+# ========================
+# API FOOTBALL
+# ========================
+API_FOOTBALL_BASE_URL = 'https://v3.football.api-sports.io'
+API_REQUEST_TIMEOUT = 10  # segundos
+
+# ========================
+# BOT TIMING
+# ========================
+CHECK_INTERVAL = 180  # 3 minutos (padrão - Smart Mode ajusta)
+SEASON = 2024
+
+# ========================
+# LOGGING
+# ========================
+LOG_LEVEL = 'INFO'
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+
+# ========================
+# HTTP SERVER (RENDER)
+# ========================
+HTTP_PORT = 10000  # Porta para manter web service ativo no Render
+
+# ========================
+# VALIDAÇÃO
+# ========================
+def validate_config():
+    """Valida se todas as variáveis de ambiente necessárias estão configuradas."""
+    missing = []
     
-    # ===== TEMPORADA =====
-    SEASON = 2024
+    if not TELEGRAM_BOT_TOKEN:
+        missing.append('TELEGRAM_BOT_TOKEN')
+    if not TELEGRAM_CHAT_ID:
+        missing.append('TELEGRAM_CHAT_ID')
+    if not API_FOOTBALL_KEY:
+        missing.append('API_FOOTBALL_KEY')
     
-    # ===== SMART MODE =====
-    ENABLE_SMART_MODE = True
+    if missing:
+        raise ValueError(f"❌ Variáveis de ambiente faltando: {', '.join(missing)}")
     
-    @classmethod
-    def get_active_leagues(cls):
-        """
-        Retorna ligas ativas por horário UTC
-        COMPETIÇÕES INTERNACIONAIS SEMPRE ATIVAS! (Champions, Europa League, etc.)
-        """
-        if not cls.ENABLE_SMART_MODE:
-            return cls.LEAGUES
-        
-        hour = datetime.utcnow().hour
-        
-        # SEMPRE incluir competições internacionais (Champions League, etc.)
-        base_leagues = cls.LEAGUES_INTERNATIONAL.copy()
-        
-        # 03h-09h UTC: Ásia + Top 2 Europa
-        if 3 <= hour < 9:
-            return base_leagues + cls.LEAGUES_PRIORITY_HIGH[:2] + [98, 307]
-        
-        # 09h-15h UTC: Europa manhã
-        elif 9 <= hour < 15:
-            return base_leagues + cls.LEAGUES_PRIORITY_HIGH + cls.LEAGUES_PRIORITY_MEDIUM[:5]
-        
-        # 15h-21h UTC: Europa tarde (PICO)
-        elif 15 <= hour < 21:
-            return base_leagues + cls.LEAGUES_PRIORITY_HIGH + cls.LEAGUES_PRIORITY_MEDIUM
-        
-        # 21h-03h UTC: Global (PICO MÁXIMO)
-        else:
-            return cls.LEAGUES  # TODAS as ligas
-    
-    # ===== OUTROS PARAMETROS =====
-    MAX_DRAW_RATE = 15.0
-    MIN_GAMES_PLAYED = 5
-    MIN_EV_PERCENT = 5.0
-    MIN_PROBABILITY_OVER_05 = 70.0
-    MIN_PROBABILITY_OVER_15 = 60.0
-    MIN_ODDS_RANGE = 1.10
-    MAX_ODDS_RANGE = 3.00
-    ANALYZE_HT_0X0 = True
-    HT_MARKETS = ['Over 0.5', 'Over 1.5']
-    
-    PROBABILITY_WEIGHTS = {
-        'poisson': 0.25,
-        'historical_rate': 0.15,
-        'recent_trend': 0.10,
-        'h2h': 0.12,
-        'offensive_strength': 0.10,
-        'offensive_trend': 0.08,
-        'season_phase': 0.08,
-        'motivation': 0.07,
-        'match_importance': 0.05,
-    }
-    
-    HT_0X0_MULTIPLIER_OVER_05 = 1.05
-    HT_0X0_MULTIPLIER_OVER_15 = 1.15
-    
-    SEND_START = True
-    SEND_HT_0X0 = True
-    SEND_EV_OPPORTUNITIES = True
-    SEND_EV_NEGATIVE = True
-    SEND_SUMMARY = True
-    SEND_ERRORS = True
-    
-    MINUTES_BEFORE_MATCH = 30
-    CHECK_INTERVAL = 300  # 5 minutos
-    HT_CHECK_INTERVAL = 60
-    
-    KELLY_FRACTION = 0.25
-    MAX_STAKE_PERCENT = 5.0
-    DEFAULT_BANKROLL = 1000.0
-    
-    API_RATE_LIMIT = 100
-    API_TIMEOUT = 10
-    BOOKMAKER_ID = 8
-    DB_PATH = 'santo_graal_ev.db'
-    LOG_LEVEL = 'INFO'
-    LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    
-    @classmethod
-    def validate(cls):
-        errors = []
-        if not cls.API_FOOTBALL_KEY:
-            errors.append("API_FOOTBALL_KEY não configurada")
-        if not cls.TELEGRAM_BOT_TOKEN:
-            errors.append("TELEGRAM_BOT_TOKEN não configurado")
-        if not cls.TELEGRAM_CHAT_ID:
-            errors.append("TELEGRAM_CHAT_ID não configurado")
-        if errors:
-            raise ValueError(f"Configurações inválidas: {', '.join(errors)}")
-        return True
-    
-    @classmethod
-    def get_league_name(cls, league_id: int) -> str:
-        return cls.LEAGUE_NAMES.get(league_id, f"Liga {league_id}")
-    
-    @classmethod
-    def get_current_mode_info(cls):
-        active_leagues = cls.get_active_leagues()
-        hour = datetime.utcnow().hour
-        
-        if 3 <= hour < 9:
-            mode = "🌙 Noturno Ásia"
-        elif 9 <= hour < 15:
-            mode = "🌅 Manhã Europa"
-        elif 15 <= hour < 21:
-            mode = "☀️ Tarde Europa PICO"
-        else:
-            mode = "🌆 Noite Global PICO"
-        
-        return {
-            'mode': mode,
-            'active_leagues': len(active_leagues),
-            'total_leagues': len(cls.LEAGUES),
-            'leagues': active_leagues
-        }
+    print("✅ Configuração validada com sucesso!")
+    print(f"🎯 Modo Best Available: {'ATIVO' if ENABLE_BEST_AVAILABLE_MODE else 'DESATIVADO'}")
+    print(f"📊 Notificando TOP {BEST_AVAILABLE_COUNT} jogos por ciclo")
+    print(f"🏆 {len(LEAGUES)} ligas configuradas (Smart Mode)")
+    print(f"⏱️ Check interval base: {CHECK_INTERVAL}s (ajustado por horário)")
+
+if __name__ == "__main__":
+    validate_config()
+
