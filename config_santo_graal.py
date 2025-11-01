@@ -27,6 +27,8 @@ SECOND_HALF_0X0_MULTIPLIER_OVER_15 = float(os.getenv("2H_MULT_15", "1.1"))
 
 # Filtros
 MIN_EV_POSITIVE = float(os.getenv("MIN_EV_POSITIVE", "2.0"))
+ENABLE_BEST_AVAILABLE_MODE = True
+BEST_AVAILABLE_COUNT = int(os.getenv("BEST_AVAILABLE_COUNT", "2"))
 # Kelly Criterion e configurações EV (ADICIONADAS)
 KELLY_FRACTION = float(os.getenv("KELLY_FRACTION", "0.25"))  # 25% máximo do Kelly
 KELLY_MULTIPLIER = float(os.getenv("KELLY_MULTIPLIER", "0.5"))  # Conservador 50%
@@ -34,9 +36,6 @@ MIN_KELLY_STAKE = float(os.getenv("MIN_KELLY_STAKE", "10.0"))
 MAX_KELLY_STAKE = float(os.getenv("MAX_KELLY_STAKE", "100.0"))
 DEFAULT_BANKROLL = float(os.getenv("DEFAULT_BANKROLL", "1000.0"))
 GOALS_THRESHOLD = float(os.getenv("GOALS_THRESHOLD", "2.5"))
-
-ENABLE_BEST_AVAILABLE_MODE = True
-BEST_AVAILABLE_COUNT = int(os.getenv("BEST_AVAILABLE_COUNT", "2"))
 
 # ========================
 # LIGAS MONITORADAS
