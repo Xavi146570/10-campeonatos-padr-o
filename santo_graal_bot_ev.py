@@ -273,34 +273,38 @@ class SantoGraalBot:
         
         return ranked
     
-    def send_telegram_message(self, message):
-        """
-        Envia mensagem para o Telegram.
-        
-        Args:
-            message (str): Mensagem formatada em MarkdownV2
-        
-        Returns:
-            bool: True se enviado com sucesso
-        """
-        url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
-        payload = {
-            'chat_id': self.chat_id,
-            'text': message,
-            'parse_mode': config.TELEGRAM_PARSE_MODE
-        }
-        
-        try:
-            response = requests.post(url, json=payload, timeout=10)
-            response.raise_for_status()
-            logger.info("✅ Mensagem enviada com sucesso para Telegram")
+    def send_telegram_safe(message):
+    """Envia mensagem com fallback automático"""
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    
+    # Primeira tentativa: HTML (recomendado)
+    payload_html = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
+    }
+    
+    try:
+        response = requests.post(url, json=payload_html, timeout=15)
+        if response.status_code == 200 and response.json().get("ok"):
             return True
-        
-        except requests.exceptions.RequestException as e:
-            logger.error(f"❌ Erro ao enviar mensagem Telegram: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                logger.error(f"Response: {e.response.text}")
-            return False
+    except Exception as e:
+        print(f"❌ HTML falhou: {e}")
+    
+    # Fallback: Texto simples (sem formatação)
+    payload_plain = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "disable_web_page_preview": True
+    }
+    
+    try:
+        response = requests.post(url, json=payload_plain, timeout=15)
+        return response.status_code == 200 and response.json().get("ok")
+    except Exception as e:
+        print(f"❌ Falha total: {e}")
+        return False
     
     def run(self):
         """Loop principal do bot."""
