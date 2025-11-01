@@ -51,9 +51,10 @@ class SantoGraalBot:
     """Bot principal com Modo Best Available."""
     
     def __init__(self):
-        self.api_key = config.API_FOOTBALL_KEY
-        self.telegram_token = config.TELEGRAM_BOT_TOKEN
-        self.chat_id = config.TELEGRAM_CHAT_ID
+        # .strip() previne problemas com quebras de linha (%0A)
+        self.api_key = (config.API_FOOTBALL_KEY or "").strip()
+        self.telegram_token = (config.TELEGRAM_BOT_TOKEN or "").strip()
+        self.chat_id = (config.TELEGRAM_CHAT_ID or "").strip()
         self.base_url = config.API_FOOTBALL_BASE_URL
         
         self.prob_calculator = ProbabilityCalculator()
@@ -93,12 +94,6 @@ class SantoGraalBot:
     def is_game_0x0(self, fixture):
         """
         Verifica se o jogo está 0-0 em qualquer momento válido (HT, 1H, 2H).
-        
-        Args:
-            fixture (dict): Dados da partida
-        
-        Returns:
-            bool: True se jogo está 0-0 em momento válido
         """
         status = fixture['fixture']['status']['short']
         home_score = fixture['goals']['home']
@@ -116,12 +111,6 @@ class SantoGraalBot:
     def get_live_fixtures(self, league_id):
         """
         Busca partidas ao vivo de uma liga específica.
-        
-        Args:
-            league_id (int): ID da liga
-        
-        Returns:
-            list: Lista de fixtures ou lista vazia em caso de erro
         """
         url = f"{self.base_url}/fixtures"
         headers = {
@@ -135,14 +124,10 @@ class SantoGraalBot:
         try:
             response = requests.get(url, headers=headers, params=params, timeout=config.API_REQUEST_TIMEOUT)
             response.raise_for_status()
-            
             data = response.json()
-            
             if data.get('results', 0) > 0:
                 return data['response']
-            
             return []
-        
         except requests.exceptions.RequestException as e:
             logger.error(f"❌ Erro ao buscar fixtures da liga {league_id}: {e}")
             return []
@@ -150,12 +135,6 @@ class SantoGraalBot:
     def get_multipliers(self, status):
         """
         Retorna multiplicadores baseados no status do jogo.
-        
-        Args:
-            status (str): Status do jogo (HT, 1H, 2H)
-        
-        Returns:
-            tuple: (multiplier_over_05, multiplier_over_15)
         """
         if status == 'HT':
             return (config.HALFTIME_0X0_MULTIPLIER_OVER_05, config.HALFTIME_0X0_MULTIPLIER_OVER_15)
@@ -167,13 +146,6 @@ class SantoGraalBot:
     def analyze_fixture(self, fixture, league_name):
         """
         Analisa uma partida 0-0 e retorna oportunidades de apostas.
-        
-        Args:
-            fixture (dict): Dados da partida
-            league_name (str): Nome da liga
-        
-        Returns:
-            list: Lista de dicionários com oportunidades
         """
         opportunities = []
         
@@ -196,7 +168,6 @@ class SantoGraalBot:
         prob_over_15 = min(probs['over_15'] * mult_15, 100.0)
         
         # Mock de odds (em produção, usar API de odds real)
-        # Aqui simulamos odds baseadas na probabilidade inversa com margem
         offered_odds_05 = (100 / prob_over_05) * 0.95  # 5% margem da casa
         offered_odds_15 = (100 / prob_over_15) * 0.95
         
@@ -237,74 +208,75 @@ class SantoGraalBot:
     def rank_opportunities(self, opportunities):
         """
         Ranqueia oportunidades por qualidade (EV+ e odds > fair primeiro, depois maior EV).
-        
-        Args:
-            opportunities (list): Lista de oportunidades
-        
-        Returns:
-            list: Lista ordenada com ranking adicionado
         """
-        # Adicionar score de ranking
         for opp in opportunities:
             ev = opp['ev']
             prob = opp['probability']
             offered_odds = opp['offered_odds']
             fair_odds = 100 / prob
             
-            # Prioridade 1: EV positivo E odds acima da justa
             if ev >= config.MIN_EV_POSITIVE and offered_odds > fair_odds:
                 bonus = 1000  # Grande bônus
-            # Prioridade 2: EV positivo (mesmo se odds < fair)
             elif ev >= 0:
                 bonus = 500
-            # Prioridade 3: EV negativo mas próximo de zero
             else:
                 bonus = 0
             
-            # Score = bônus + EV normalizado + probabilidade pequena
             opp['rank_score'] = bonus + (ev * 1000) + (prob * 0.1)
         
-        # Ordenar por score (maior = melhor)
         ranked = sorted(opportunities, key=lambda x: x['rank_score'], reverse=True)
-        
-        # Adicionar número do ranking
         for idx, opp in enumerate(ranked, 1):
             opp['rank'] = idx
-        
         return ranked
     
-    def send_telegram_safe(message):
-    """Envia mensagem com fallback automático"""
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    
-    # Primeira tentativa: HTML (recomendado)
-    payload_html = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True
-    }
-    
-    try:
-        response = requests.post(url, json=payload_html, timeout=15)
-        if response.status_code == 200 and response.json().get("ok"):
-            return True
-    except Exception as e:
-        print(f"❌ HTML falhou: {e}")
-    
-    # Fallback: Texto simples (sem formatação)
-    payload_plain = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "disable_web_page_preview": True
-    }
-    
-    try:
-        response = requests.post(url, json=payload_plain, timeout=15)
-        return response.status_code == 200 and response.json().get("ok")
-    except Exception as e:
-        print(f"❌ Falha total: {e}")
+    def send_telegram_safe(self, message):
+        """Envia mensagem com fallback automático (HTML -> texto simples)."""
+        url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
+        
+        # Primeira tentativa: HTML (resolve problemas com pontos em odds)
+        payload_html = {
+            "chat_id": self.chat_id,
+            "text": message,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True
+        }
+        
+        try:
+            response = requests.post(url, json=payload_html, timeout=config.API_REQUEST_TIMEOUT)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("ok"):
+                return True
+            else:
+                logger.error(f"❌ Telegram rejeitou (HTML): {data}")
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"❌ Erro HTTP Telegram (HTML): {e}")
+        except Exception as e:
+            logger.error(f"❌ Erro ao enviar (HTML): {e}")
+        
+        # Fallback: Texto simples (sem formatação)
+        payload_plain = {
+            "chat_id": self.chat_id,
+            "text": message,
+            "disable_web_page_preview": True
+        }
+        
+        try:
+            response = requests.post(url, json=payload_plain, timeout=config.API_REQUEST_TIMEOUT)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("ok"):
+                return True
+            else:
+                logger.error(f"❌ Telegram rejeitou (Plain): {data}")
+        except Exception as e:
+            logger.error(f"❌ Erro ao enviar (Plain): {e}")
+        
         return False
+    
+    def send_telegram_message(self, message):
+        """Wrapper para compatibilidade com código existente."""
+        return self.send_telegram_safe(message)
     
     def run(self):
         """Loop principal do bot."""
@@ -331,7 +303,6 @@ class SantoGraalBot:
                     
                     for fixture in fixtures:
                         if self.is_game_0x0(fixture):
-                            # Analisar e adicionar oportunidades
                             opportunities = self.analyze_fixture(fixture, league_name)
                             all_opportunities.extend(opportunities)
                 
@@ -339,15 +310,19 @@ class SantoGraalBot:
                 if all_opportunities:
                     logger.info(f"🎯 {len(all_opportunities)} oportunidades encontradas")
                     
-                    # Ranquear
                     ranked_opportunities = self.rank_opportunities(all_opportunities)
                     
-                    # Enviar TOP N
+                    # Enviar TOP N (Best Available)
+                    sent_count = 0
                     if self.best_available_mode:
-                        message = self.ev_detector.format_best_available_message(ranked_opportunities)
-                        if message:
-                            self.send_telegram_message(message)
+                        message = self.ev_detector.format_best_available_message(
+                            ranked_opportunities[:self.best_available_count]
+                        )
+                        if message and self.send_telegram_message(message):
+                            sent_count = min(len(ranked_opportunities), self.best_available_count)
                             logger.info(f"✅ TOP {self.best_available_count} oportunidades enviadas")
+                        else:
+                            logger.error("❌ Falha ao enviar mensagem do Telegram")
                     else:
                         # Modo legado: enviar apenas EV+
                         for opp in ranked_opportunities:
@@ -357,7 +332,11 @@ class SantoGraalBot:
                                     opp['probability'], opp['offered_odds'],
                                     opp['ev'], opp['kelly'], opp['timestamp']
                                 )
-                                self.send_telegram_message(message)
+                                if self.send_telegram_message(message):
+                                    sent_count += 1
+                        
+                        if sent_count > 0:
+                            logger.info(f"✅ {sent_count} oportunidades EV+ enviadas")
                 else:
                     logger.info("⏳ Nenhum jogo 0-0 encontrado no momento")
                 
