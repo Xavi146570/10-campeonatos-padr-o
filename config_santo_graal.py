@@ -182,3 +182,42 @@ def validate_config():
 if __name__ == "__main__":
     validate_config()
 
+# Configurações adicionais para versão super poderosa
+
+# Odds API (The Odds API recomendado)
+ODDS_API_KEY = os.getenv("ODDS_API_KEY", "YOUR_ODDS_API_KEY")
+
+# Risk Management
+INITIAL_BANKROLL = float(os.getenv("INITIAL_BANKROLL", "1000.0"))
+MIN_CONFIDENCE_THRESHOLD = float(os.getenv("MIN_CONFIDENCE_THRESHOLD", "60.0"))
+
+# Margem simulada quando sem odds reais
+BOOKMAKER_MARGIN_SIMULATED = float(os.getenv("BOOKMAKER_MARGIN", "0.05"))  # 5%
+
+# Performance
+MIN_EV_POSITIVE = float(os.getenv("MIN_EV_POSITIVE", "2.0"))  # 2% mínimo
+
+def validate_config():
+    """Validação melhorada das configurações."""
+    issues = []
+    
+    if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "SEU_TOKEN_TELEGRAM_AQUI":
+        issues.append("⚠️ TELEGRAM_BOT_TOKEN não configurado")
+    
+    if not TELEGRAM_CHAT_ID or TELEGRAM_CHAT_ID == "SEU_CHAT_ID_AQUI":
+        issues.append("⚠️ TELEGRAM_CHAT_ID não configurado")
+    
+    if not API_FOOTBALL_KEY or API_FOOTBALL_KEY == "SUA_CHAVE_API_AQUI":
+        issues.append("⚠️ API_FOOTBALL_KEY não configurada")
+    
+    if not ODDS_API_KEY or ODDS_API_KEY == "YOUR_ODDS_API_KEY":
+        issues.append("⚠️ ODDS_API_KEY não configurada (usará odds simuladas)")
+    
+    if issues:
+        for issue in issues:
+            print(issue)
+        
+        if len(issues) >= 3:  # Muitos problemas críticos
+            print("❌ Muitas configurações em falta. Bot pode não funcionar corretamente.")
+    else:
+        print("✅ Todas as configurações validadas com sucesso!")
