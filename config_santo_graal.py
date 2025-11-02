@@ -80,6 +80,7 @@ SMART_MODE_CONFIG = {
             'Eliteserien', 'Allsvenskan', 'Superliga'
         ],
         'check_interval': 180
+        SEASON = 2024
     },
     'afternoon': {
         'hours': (15, 21),
