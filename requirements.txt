@@ -1,4 +1,3 @@
 flask
 discord.py
-request
 
