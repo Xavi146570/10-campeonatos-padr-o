@@ -248,20 +248,20 @@ class SantoGraalBot:
         return ranked
     
     def send_telegram_message(self, message):
-    """Envia mensagem para o Telegram."""
-    url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
-    payload = {
-        'chat_id': self.chat_id,
-        'text': message,
-        'parse_mode': 'Markdown'
-    }
-        
+        """Envia mensagem para o Telegram."""
+        url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
+        payload = {
+            'chat_id': self.chat_id,
+            'text': message,
+            'parse_mode': 'Markdown'
+        }
+
         try:
             response = requests.post(url, json=payload, timeout=10)
             response.raise_for_status()
             logger.info("✅ Mensagem enviada com sucesso para Telegram")
             return True
-        
+
         except requests.exceptions.RequestException as e:
             logger.error(f"❌ Erro ao enviar mensagem Telegram: {e}")
             if hasattr(e, 'response') and e.response is not None:
