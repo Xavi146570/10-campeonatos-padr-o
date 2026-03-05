@@ -124,15 +124,13 @@ class SantoGraalBot:
         return list(self.leagues.keys())[:10], 180
     
     def is_game_0x0(self, fixture):
-        """Verifica se o jogo está 0-0 em qualquer momento válido (HT, 1H, 2H)."""
+        """Verifica se o jogo está 0-0 ao intervalo (apenas HT)."""
         status = fixture['fixture']['status']['short']
         home_score = fixture['goals']['home']
         away_score = fixture['goals']['away']
         
-        valid_statuses = ['HT', '1H', '2H']
-        
-        if status in valid_statuses and home_score == 0 and away_score == 0:
-            logger.info(f"✅ 0-0 detectado ({status}): {fixture['teams']['home']['name']} vs {fixture['teams']['away']['name']}")
+        if status == 'HT' and home_score == 0 and away_score == 0:
+            logger.info(f"✅ 0-0 ao intervalo detectado: {fixture['teams']['home']['name']} vs {fixture['teams']['away']['name']}")
             return True
         
         return False
