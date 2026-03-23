@@ -18,42 +18,15 @@ API_FOOTBALL_KEY = os.getenv('API_FOOTBALL_KEY')
 # ========================
 # CONFIGURAÇÃO DE LIGAS - SMART MODE
 # ========================
-# 24 ligas totais com horários de pico otimizados
-
 LEAGUES = {
-    # TIER 1 - TOP EUROPEU (Always Active)
+    'Italy Serie A': 135,
+    'Finland Veikkausliiga': 244,
+    'China Super League': 169,
     'Premier League': 39,
-    'La Liga': 140,
-    'Champions League': 2,  # UEFA Champions League
-    
-    # TIER 2 - EUROPA PRINCIPAL (15h-03h UTC)
-    'Bundesliga': 78,
-    'Serie A': 135,
-    'Ligue 1': 61,
-    'Eredivisie': 88,
-    'Liga Portugal': 94,
-    'Championship': 40,
-    
-    # TIER 3 - EUROPA SECUNDÁRIA (15h-03h UTC)
-    'Serie B': 136,
-    'La Liga 2': 141,
-    'Bundesliga 2': 79,
-    'Ligue 2': 62,
-    'Scottish Premiership': 179,
-    
-    # TIER 4 - GLOBAL (21h-03h UTC - Pico Global)
-    'MLS': 253,
-    'Liga MX': 262,
-    'Brasileirão': 71,
-    'Argentino': 128,
-    
-    # TIER 5 - ÁSIA/OCEANIA (03h-09h UTC - Madrugada Europa)
-    'J-League': 98,
-    'K-League': 292,
-    'A-League': 188,
-    'Chinese Super League': 169,
-    'Saudi Pro League': 307,
-    'Indian Super League': 323
+    'Netherlands Eredivisie': 88,
+    'Chile Primera Division': 265,
+    'Denmark Superliga': 79,
+    'Norway Eliteserien': 103
 }
 
 # ========================
@@ -63,33 +36,26 @@ SMART_MODE_CONFIG = {
     'night': {  # 03h-09h UTC (Madrugada Europa)
         'hours': (3, 9),
         'active_leagues': [
-            'J-League', 'K-League', 'A-League', 'Chinese Super League',
-            'Premier League', 'La Liga'  # Top 2 Europa sempre
+            'China Super League', 'Premier League'
         ],
         'check_interval': 180  # 3 minutos
     },
     'morning': {  # 09h-15h UTC (Manhã Europa)
         'hours': (9, 15),
         'active_leagues': [
-            'Premier League', 'La Liga', 'Bundesliga', 'Serie A',
-            'Ligue 1', 'Eredivisie', 'Liga Portugal', 'Championship',
-            'Scottish Premiership', 'Champions League'
+            'Premier League', 'Italy Serie A', 'Netherlands Eredivisie',
+            'Denmark Superliga', 'Norway Eliteserien'
         ],
         'check_interval': 180
     },
     'afternoon': {  # 15h-21h UTC (Tarde Europa - PICO)
         'hours': (15, 21),
-        'active_leagues': [
-            'Premier League', 'La Liga', 'Bundesliga', 'Serie A', 'Ligue 1',
-            'Eredivisie', 'Liga Portugal', 'Championship', 'Serie B', 'La Liga 2',
-            'Bundesliga 2', 'Ligue 2', 'Scottish Premiership', 'Champions League',
-            'MLS'
-        ],
+        'active_leagues': list(LEAGUES.keys()),
         'check_interval': 120  # 2 minutos - mais frequente no pico
     },
     'evening': {  # 21h-03h UTC (Noite Europa + Américas - PICO GLOBAL)
         'hours': (21, 24),  # 21h-00h
-        'active_leagues': list(LEAGUES.keys()),  # TODAS as 24 ligas
+        'active_leagues': list(LEAGUES.keys()),
         'check_interval': 120
     },
     'late_night': {  # 00h-03h UTC (continuação do pico)
@@ -131,7 +97,7 @@ KELLY_FRACTION = 0.25  # 25% conservador (1/4 Kelly)
 # ========================
 # TELEGRAM
 # ========================
-TELEGRAM_PARSE_MODE = 'MarkdownV2'
+TELEGRAM_PARSE_MODE = 'Markdown'
 
 # ========================
 # API FOOTBALL
